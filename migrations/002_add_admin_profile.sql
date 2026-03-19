@@ -1,0 +1,8 @@
+CREATE TABLE IF NOT EXISTS admins (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE UNIQUE,
+    full_name VARCHAR(255) NOT NULL,
+    id_number VARCHAR(50) UNIQUE,
+    image_icon TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);

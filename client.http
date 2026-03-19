@@ -1,0 +1,254 @@
+@host = http://localhost:5000
+@contentType = application/json
+
+### ==================== VARIABLES ====================
+### Store tokens and IDs here after successful requests
+@adminToken = 
+@studentToken = 
+@admindId = 1
+@studentId = 2
+@applicationId = 1
+
+### ==================== PUBLIC ENDPOINTS ====================
+
+### 1. Health Check - API Running
+GET {{host}}/
+
+### ==================== AUTH ROUTES (/api/auth) ====================
+
+### 2. Signup - First user becomes ADMIN
+POST {{host}}/api/auth/signup
+Content-Type: {{contentType}}
+
+{
+  "email": "admin@eduequity.com",
+  "password": "Admin@123",
+  "full_name": "Admin User"
+}
+
+### 3. Signup - Register a Student
+POST {{host}}/api/auth/signup
+Content-Type: {{contentType}}
+
+{
+  "email": "student1@eduequity.com",
+  "password": "Student@123",
+  "full_name": "John Kipchoge",
+  "national_id": "12345678",
+  "institution": "University of Nairobi",
+  "course": "Computer Science",
+  "year_of_study": 2
+}
+
+### 4. Login - Admin Login
+POST {{host}}/api/auth/login
+Content-Type: {{contentType}}
+
+{
+  "email": "admin@eduequity.com",
+  "password": "Admin@123"
+}
+
+### 5. Login - Student Login
+POST {{host}}/api/auth/login
+Content-Type: {{contentType}}
+
+{
+  "email": "student1@eduequity.com",
+  "password": "Student@123"
+}
+
+### 6. Forgot Password
+POST {{host}}/api/auth/forgot-password
+Content-Type: {{contentType}}
+
+{
+  "email": "student1@eduequity.com"
+}
+
+### 7. Reset Password
+POST {{host}}/api/auth/reset-password
+Content-Type: {{contentType}}
+
+{
+  "email": "student1@eduequity.com",
+  "token": "reset-token-from-email",
+  "newPassword": "NewPassword@123"
+}
+
+### ==================== STUDENTS ROUTES (/api/students) ====================
+
+### 8. Student Register (Alternative to Auth Signup)
+POST {{host}}/api/students/register/student
+Content-Type: {{contentType}}
+
+{
+  "email": "student2@eduequity.com",
+  "password": "Student@123",
+  "full_name": "Grace Mwangi",
+  "national_id": "87654321",
+  "institution": "Kenyatta University",
+  "course": "Business Administration",
+  "year_of_study": 3
+}
+
+### 9. Get Student Profile
+GET {{host}}/api/students/profile
+Authorization: Bearer {{studentToken}}
+
+### 10. Update Student Profile
+PUT {{host}}/api/students/profile
+Authorization: Bearer {{studentToken}}
+Content-Type: {{contentType}}
+
+{
+  "full_name": "John Kipchoge Updated",
+  "institution": "University of Nairobi",
+  "course": "Computer Science",
+  "year_of_study": 3
+}
+
+### ==================== USERS ROUTES (/api/users) ====================
+
+### 11. Register Admin User (Admin Only)
+POST {{host}}/api/users/admin
+Authorization: Bearer {{adminToken}}
+Content-Type: {{contentType}}
+
+{
+  "email": "admin2@eduequity.com",
+  "password": "Admin@123",
+  "full_name": "Second Admin"
+}
+
+### ==================== REGISTER ROUTES (/api/register) ====================
+
+### 12. Admin Registers New Student (Admin Only)
+POST {{host}}/api/register/
+Authorization: Bearer {{adminToken}}
+Content-Type: {{contentType}}
+
+{
+  "email": "student3@eduequity.com",
+  "password": "Student@123",
+  "role": "STUDENT",
+  "full_name": "David Ochieng",
+  "national_id": "11111111",
+  "institution": "Mount Kenya University",
+  "course": "Engineering",
+  "year_of_study": 1
+}
+
+### 12b. Admin Registers New Admin (Admin Only)
+POST {{host}}/api/register/
+Authorization: Bearer {{adminToken}}
+Content-Type: {{contentType}}
+
+{
+  "email": "admin3@eduequity.com",
+  "password": "Admin@123",
+  "role": "ADMIN",
+  "full_name": "Third Admin"
+}
+
+### ==================== APPLICATIONS ROUTES (/api/applications) ====================
+
+### 13. Submit Application with Documents (Student Only)
+### Note: This requires multipart/form-data. Use REST Client extension to upload files.
+POST {{host}}/api/applications/
+Authorization: Bearer {{studentToken}}
+Content-Type: multipart/form-data; boundary=----WebKitFormBoundary
+
+------WebKitFormBoundary
+Content-Disposition: form-data; name="cycle_year"
+
+2026
+------WebKitFormBoundary
+Content-Disposition: form-data; name="amount_requested"
+
+50000
+------WebKitFormBoundary
+Content-Disposition: form-data; name="documents"; filename="document.pdf"
+Content-Type: application/pdf
+
+< ./sample-document.pdf
+------WebKitFormBoundary--
+
+### 13b. Submit Application Without Documents (Simplified)
+POST {{host}}/api/applications/
+Authorization: Bearer {{studentToken}}
+Content-Type: {{contentType}}
+
+{
+  "cycle_year": 2026,
+  "amount_requested": 50000
+}
+
+### 14. Get My Applications (Student Only)
+GET {{host}}/api/applications/my-applications
+Authorization: Bearer {{studentToken}}
+
+### 15. Get All Applications (Admin/Committee Only)
+GET {{host}}/api/applications/
+Authorization: Bearer {{adminToken}}
+
+### 16. Get All Applications with Status Filter
+GET {{host}}/api/applications/?status=PENDING
+Authorization: Bearer {{adminToken}}
+
+### 17. Get Audit Logs for Application (Admin Only)
+GET {{host}}/api/applications/1/audit-logs
+Authorization: Bearer {{adminToken}}
+
+### 18. Approve Application (Admin Only)
+PATCH {{host}}/api/applications/1/status
+Authorization: Bearer {{adminToken}}
+Content-Type: {{contentType}}
+
+{
+  "status": "APPROVED",
+  "amount_allocated": 50000
+}
+
+### 19. Reject Application (Admin Only)
+PATCH {{host}}/api/applications/1/status
+Authorization: Bearer {{adminToken}}
+Content-Type: {{contentType}}
+
+{
+  "status": "REJECTED"
+}
+
+### ==================== TESTING CHECKLIST ====================
+###
+### Run these endpoints in order:
+### 1. GET / (Health check)
+### 2. POST /api/auth/signup (Create admin - first time)
+### 3. POST /api/auth/signup (Create student)
+### 4. POST /api/auth/login (Login as admin - save token)
+### 5. POST /api/auth/login (Login as student - save token)
+### 6. GET /api/students/profile (Get student profile)
+### 7. PUT /api/students/profile (Update student profile)
+### 8. POST /api/applications/ (Submit application)
+### 9. GET /api/applications/my-applications (View my applications)
+### 10. GET /api/applications/ (Admin view all applications)
+### 11. PATCH /api/applications/1/status (Approve/Reject application)
+### 12. GET /api/applications/1/audit-logs (View audit logs)
+###
+### ==================== NOTES ====================
+### 
+### Authentication:
+### - All endpoints prefixed with * require authentication via Bearer token
+### - Get tokens from login responses and store in @adminToken/@studentToken variables
+### 
+### File Uploads:
+### - For endpoints with file uploads, use the REST Client extension
+### - Or use curl/Postman for multipart/form-data
+### 
+### Status Values:
+### - Applications: PENDING, APPROVED, REJECTED
+### - TAADA Flags: FIRST_TIME, REJECTED_BEFORE, ALREADY_FUNDED
+### 
+### Default Port: 5000
+### Database: PostgreSQL (localhost:5432)
+###
