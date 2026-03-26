@@ -44,6 +44,29 @@ export const USER_ROLES = {
 export type UserRole = typeof USER_ROLES[keyof typeof USER_ROLES];
 
 /**
+ * Bursary Type / Fund Source Constants
+ */
+export const BURSARY_TYPES = {
+    MCA: 'MCA',
+    CDF: 'CDF',
+    COUNTY: 'COUNTY',
+    NATIONAL: 'NATIONAL',
+} as const;
+
+export type BursaryType = typeof BURSARY_TYPES[keyof typeof BURSARY_TYPES];
+
+/**
+ * Cash Flow Transaction Types
+ */
+export const CASH_FLOW_TYPES = {
+    ALLOCATION: 'ALLOCATION',
+    DISBURSEMENT: 'DISBURSEMENT',
+    REVERSAL: 'REVERSAL',
+} as const;
+
+export type CashFlowType = typeof CASH_FLOW_TYPES[keyof typeof CASH_FLOW_TYPES];
+
+/**
  * HTTP Status Codes
  */
 export const HTTP_STATUS = {

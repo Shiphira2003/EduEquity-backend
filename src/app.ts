@@ -10,6 +10,9 @@ import authRouter from "./routes/auth.routes";
 import adminRouter from "./routes/admin";
 import notificationsRouter from "./routes/notifications";
 import announcementsRouter from "./routes/announcements";
+import assessmentsRouter from "./routes/assessments";
+import fundsourcesRouter from "./routes/fundsources";
+import rankingRouter from "./routes/ranking";
 
 const app = express();
 
@@ -29,6 +32,9 @@ app.use("/api/auth", authRouter);
 app.use("/api/admin", adminRouter);
 app.use("/api/notifications", notificationsRouter);
 app.use("/api/announcements", announcementsRouter);
+app.use("/api/assessments", assessmentsRouter);  // NEW - Need assessments
+app.use("/api/fundsources", fundsourcesRouter);  // NEW - Fund sources & cash flow
+app.use("/api/ranking", rankingRouter);          // NEW - TAADA rankings
 
 app.get("/", (req, res) => {
     res.json({ message: "EduEquity API running" });
