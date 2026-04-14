@@ -1,5 +1,8 @@
 import { Request, Response, NextFunction } from "express";
 import { verifyToken } from "../utils/jwt";
+import { db } from "../db/db";
+import { usersTable } from "../db/schema";
+import { eq } from "drizzle-orm";
 
 export interface AuthRequest extends Request {
     user?: {
@@ -8,7 +11,7 @@ export interface AuthRequest extends Request {
     };
 }
 
-export const authMiddleware = (
+export const authMiddleware = async (
     req: AuthRequest,
     res: Response,
     next: NextFunction
@@ -22,7 +25,17 @@ export const authMiddleware = (
     const token = authHeader.split(" ")[1];
 
     try {
-        const decoded = verifyToken(token);
+        const decoded = verifyToken(token) as any;
+        
+        // Real-time check if user is still active
+        const userRes = await db.select({ isActive: usersTable.isActive })
+            .from(usersTable)
+            .where(eq(usersTable.id, decoded.userId));
+
+        if (userRes.length === 0 || !userRes[0].isActive) {
+            return res.status(403).json({ message: "Your account has been deactivated or discontinued. Please contact support." });
+        }
+
         req.user = decoded;
         next();
     } catch {

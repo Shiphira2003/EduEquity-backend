@@ -18,7 +18,7 @@ import {
 // ENUMS
 // ============================================
 
-export const userRoleEnum = pgEnum("userRole", ["ADMIN", "STUDENT", "COMMITTEE"]);
+export const userRoleEnum = pgEnum("userRole", ["ADMIN", "STUDENT", "COMMITTEE", "SUPER_ADMIN"]);
 
 export const applicationStatusEnum = pgEnum("applicationStatus", [
   "PENDING",
@@ -65,6 +65,7 @@ export const usersTable = pgTable(
       onDelete: "set null",
     }),
     isActive: boolean("is_active").default(true),
+    isVerified: boolean("is_verified").default(false),
     createdAt: timestamp("created_at").defaultNow(),
   },
   (table) => ({
@@ -83,8 +84,15 @@ export const studentsTable = pgTable(
     fullName: varchar("full_name", { length: 255 }).notNull(),
     nationalId: varchar("national_id", { length: 50 }).notNull().unique(),
     institution: varchar("institution", { length: 255 }).notNull(),
-    course: varchar("course", { length: 255 }).notNull(),
+    educationLevel: varchar("education_level", { length: 50 }).default("TERTIARY"),
+    course: varchar("course", { length: 255 }),
     yearOfStudy: integer("year_of_study").notNull(),
+    schoolBankName: varchar("school_bank_name", { length: 255 }),
+    schoolAccountNumber: varchar("school_account_number", { length: 100 }),
+    county: varchar("county", { length: 100 }),
+    constituency: varchar("constituency", { length: 100 }),
+    isBankLocked: boolean("is_bank_locked").default(false),
+    avatar: varchar("avatar", { length: 50 }),
     createdAt: timestamp("created_at").defaultNow(),
   },
   (table) => ({
@@ -111,8 +119,11 @@ export const applicationsTable = pgTable(
       .references(() => studentsTable.id, { onDelete: "cascade" }),
     cycleYear: integer("cycle_year").notNull(),
     bursaryType: bursaryTypeEnum("bursary_type").default("NATIONAL"), // NEW - Fund source
+    county: varchar("county", { length: 100 }), // NEW - County
+    constituency: varchar("constituency", { length: 100 }), // NEW - Constituency
     needScore: decimal("need_score", { precision: 5, scale: 2 }).default("0"), // NEW - Need assessment (0-100)
     amountRequested: decimal("amount_requested", { precision: 12, scale: 2 }).notNull(),
+    feeBalance: decimal("fee_balance", { precision: 12, scale: 2 }).notNull().default("0"),
     amountAllocated: decimal("amount_allocated", { precision: 12, scale: 2 }).default("0"),
     status: applicationStatusEnum("status").default("PENDING"),
     taadaFlag: taadaFlagEnum("taada_flag").default("FIRST_TIME"),
@@ -182,6 +193,9 @@ export const fundSourcesTable = pgTable(
     cycleYear: integer("cycle_year").notNull(),
     allocatedAmount: decimal("allocated_amount", { precision: 12, scale: 2 }).default("0"),
     disbursedAmount: decimal("disbursed_amount", { precision: 12, scale: 2 }).default("0"),
+    isOpen: boolean("is_open").default(false),
+    startDate: timestamp("start_date"),
+    endDate: timestamp("end_date"),
     createdAt: timestamp("created_at").defaultNow(),
     updatedAt: timestamp("updated_at").defaultNow(),
   },
@@ -253,6 +267,68 @@ export const passwordResetsTable = pgTable(
   })
 );
 
+// 10. Notifications Table
+export const notificationsTable = pgTable(
+  "notifications",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("user_id").references(() => usersTable.id, { onDelete: "cascade" }),
+    message: text("message").notNull(),
+    isRead: boolean("is_read").default(false),
+    type: varchar("type", { length: 50 }),
+    createdAt: timestamp("created_at").defaultNow(),
+  },
+  (table) => ({
+    userIdIdx: index("notifications_user_id_idx").on(table.userId),
+  })
+);
+
+// 11. Announcements Table
+export const announcementsTable = pgTable(
+  "announcements",
+  {
+    id: serial("id").primaryKey(),
+    title: varchar("title", { length: 255 }).notNull(),
+    message: text("message").notNull(),
+    createdBy: integer("created_by").references(() => usersTable.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at").defaultNow(),
+  }
+);
+
+// 12. Admins Table (admin profile details)
+export const adminsTable = pgTable(
+  "admins",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("user_id")
+      .notNull()
+      .references(() => usersTable.id, { onDelete: "cascade" }),
+    fullName: varchar("full_name", { length: 255 }),
+    idNumber: varchar("id_number", { length: 50 }),
+    imageIcon: text("image_icon"),
+    systemId: varchar("system_id", { length: 50 }).unique(),
+    createdAt: timestamp("created_at").defaultNow(),
+  },
+  (table) => ({
+    userIdIdx: uniqueIndex("admins_user_id_idx").on(table.userId),
+  })
+);
+
+// 13. OTP Verifications Table
+export const otpVerificationsTable = pgTable(
+  "otp_verifications",
+  {
+    id: serial("id").primaryKey(),
+    email: varchar("email", { length: 255 }).notNull(),
+    otp: varchar("otp", { length: 10 }).notNull(),
+    expiresAt: timestamp("expires_at").notNull(),
+    createdAt: timestamp("created_at").defaultNow(),
+  },
+  (table) => ({
+    emailIdx: index("otp_email_idx").on(table.email),
+  })
+);
+
 // ============================================
 // RELATIONS
 // ============================================
@@ -269,6 +345,8 @@ export const usersRelations = relations(usersTable, ({ one, many }) => ({
   }),
   auditLogs: many(auditLogsTable),
   passwordResets: many(passwordResetsTable),
+  notifications: many(notificationsTable),
+  announcements: many(announcementsTable),
 }));
 
 // Role Relations
@@ -391,3 +469,15 @@ export type TNeedAssessmentSelect = typeof needAssessmentTable.$inferSelect;
 // Cash Flow Types
 export type TCashFlowInsert = typeof cashFlowTable.$inferInsert;
 export type TCashFlowSelect = typeof cashFlowTable.$inferSelect;
+
+// Notification Types
+export type TNotificationInsert = typeof notificationsTable.$inferInsert;
+export type TNotificationSelect = typeof notificationsTable.$inferSelect;
+
+// Announcement Types
+export type TAnnouncementInsert = typeof announcementsTable.$inferInsert;
+export type TAnnouncementSelect = typeof announcementsTable.$inferSelect;
+
+// Admin Profile Types
+export type TAdminInsert = typeof adminsTable.$inferInsert;
+export type TAdminSelect = typeof adminsTable.$inferSelect;

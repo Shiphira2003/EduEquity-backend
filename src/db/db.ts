@@ -1,4 +1,6 @@
 import { Pool } from "pg";
+import { drizzle } from "drizzle-orm/node-postgres";
+import * as schema from "./schema";
 import { config } from "../config/config"; // adjust path if needed
 
 // Create PostgreSQL pool using config
@@ -18,6 +20,7 @@ const poolConfig: any = config().dbUrl
   };
 
 const pool = new Pool(poolConfig);
+const db = drizzle({ client: pool, schema });
 
 // Test connection immediately
 (async () => {
@@ -30,4 +33,5 @@ const pool = new Pool(poolConfig);
   }
 })();
 
+export { pool, db };
 export default pool;

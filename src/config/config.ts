@@ -26,6 +26,7 @@ export function config() {
 
     // JWT secret
     jwtSecret: requireEnv("JWT_SECRET"),
+    jwtRefreshSecret: process.env.JWT_REFRESH_SECRET || requireEnv("JWT_SECRET") + "_refresh",
 
     // Email Config
     emailUser: process.env.EMAIL_USER,

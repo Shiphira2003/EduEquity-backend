@@ -1,6 +1,12 @@
-import pool from "../db/db";
-import { errorResponse, successResponse } from "../utils/response";
-import { Response } from "express";
+import { db } from "../db/db";
+import {
+    fundSourcesTable,
+    cashFlowTable,
+    disbursementsTable,
+    applicationsTable,
+    studentsTable,
+} from "../db/schema";
+import { eq, and, sql, desc, count, sum, between, inArray } from "drizzle-orm";
 
 // ============================================
 // FUND SOURCE & CASH FLOW MANAGEMENT
@@ -34,27 +40,30 @@ export interface CashFlowRecord {
 export const initializeFundSources = async (cycleYear: number): Promise<void> => {
   try {
     const fundSources = [
-      { name: "MCA", budget: 500000, description: "Mobilization on Contentious Areas" },
-      { name: "CDF", budget: 300000, description: "Constituency Development Fund" },
-      { name: "COUNTY", budget: 400000, description: "County Government Budget" },
-      { name: "NATIONAL", budget: 800000, description: "National Government Budget" },
+      { name: "MCA" as const, budget: "500000", description: "Mobilization on Contentious Areas" },
+      { name: "CDF" as const, budget: "300000", description: "Constituency Development Fund" },
+      { name: "COUNTY" as const, budget: "400000", description: "County Government Budget" },
+      { name: "NATIONAL" as const, budget: "800000", description: "National Government Budget" },
     ];
 
     for (const source of fundSources) {
       // Check if already exists
-      const exists = await pool.query(
-        `SELECT id FROM fund_sources WHERE name = $1 AND cycle_year = $2`,
-        [source.name, cycleYear]
-      );
+      const existing = await db.select({ id: fundSourcesTable.id })
+        .from(fundSourcesTable)
+        .where(and(
+          eq(fundSourcesTable.name, source.name),
+          eq(fundSourcesTable.cycleYear, cycleYear)
+        ));
 
-      if (exists.rowCount === 0) {
-        await pool.query(
-          `
-          INSERT INTO fund_sources (name, description, budget_per_cycle, cycle_year, allocated_amount, disbursed_amount)
-          VALUES ($1, $2, $3, $4, 0, 0)
-          `,
-          [source.name, source.description, source.budget, cycleYear]
-        );
+      if (existing.length === 0) {
+        await db.insert(fundSourcesTable).values({
+          name: source.name,
+          description: source.description,
+          budgetPerCycle: source.budget,
+          cycleYear,
+          allocatedAmount: "0",
+          disbursedAmount: "0",
+        });
       }
     }
   } catch (error) {
@@ -69,30 +78,29 @@ export const getFundSourceBalances = async (
   cycleYear: number
 ): Promise<FundSourceBalance[]> => {
   try {
-    const result = await pool.query(
-      `
-      SELECT
-        name as fund_source,
-        budget_per_cycle as budget_per_cycle,
-        allocated_amount as allocated_amount,
-        disbursed_amount as disbursed_amount,
-        (budget_per_cycle - allocated_amount) as available_balance,
-        ROUND((allocated_amount / budget_per_cycle * 100)::numeric, 2) as utilization_percentage
-      FROM fund_sources
-      WHERE cycle_year = $1
-      ORDER BY name
-      `,
-      [cycleYear]
-    );
+    const result = await db.select({
+      fundSource: fundSourcesTable.name,
+      budgetPerCycle: fundSourcesTable.budgetPerCycle,
+      allocatedAmount: fundSourcesTable.allocatedAmount,
+      disbursedAmount: fundSourcesTable.disbursedAmount,
+    })
+    .from(fundSourcesTable)
+    .where(eq(fundSourcesTable.cycleYear, cycleYear))
+    .orderBy(fundSourcesTable.name);
 
-    return result.rows.map((row: any) => ({
-      fundSource: row.fund_source,
-      budgetPerCycle: parseFloat(row.budget_per_cycle),
-      allocatedAmount: parseFloat(row.allocated_amount),
-      disbursedAmount: parseFloat(row.disbursed_amount),
-      availableBalance: parseFloat(row.available_balance),
-      utilizationPercentage: parseFloat(row.utilization_percentage),
-    }));
+    return result.map((row) => {
+      const budget = parseFloat(row.budgetPerCycle);
+      const allocated = parseFloat(row.allocatedAmount ?? "0");
+      const disbursed = parseFloat(row.disbursedAmount ?? "0");
+      return {
+        fundSource: row.fundSource,
+        budgetPerCycle: budget,
+        allocatedAmount: allocated,
+        disbursedAmount: disbursed,
+        availableBalance: budget - allocated,
+        utilizationPercentage: budget > 0 ? Math.round((allocated / budget) * 10000) / 100 : 0,
+      };
+    });
   } catch (error) {
     console.error("Error getting fund source balances:", error);
     return [];
@@ -113,17 +121,13 @@ export const recordCashFlow = async (
 ): Promise<void> => {
   try {
     // Get current balance before this transaction
-    const lastRecord = await pool.query(
-      `
-      SELECT balance_after FROM cash_flow_records
-      WHERE fund_source = $1
-      ORDER BY created_at DESC
-      LIMIT 1
-      `,
-      [fundSource]
-    );
+    const lastRecord = await db.select({ balanceAfter: cashFlowTable.balanceAfter })
+      .from(cashFlowTable)
+      .where(eq(cashFlowTable.fundSource, fundSource as any))
+      .orderBy(desc(cashFlowTable.createdAt))
+      .limit(1);
 
-    const balanceBefore = lastRecord.rowCount > 0 ? parseFloat(lastRecord.rows[0].balance_after) : 0;
+    const balanceBefore = lastRecord.length > 0 ? parseFloat(lastRecord[0].balanceAfter) : 0;
 
     // Calculate balance after
     let balanceAfter = balanceBefore;
@@ -136,34 +140,37 @@ export const recordCashFlow = async (
     }
 
     // Record the transaction
-    await pool.query(
-      `
-      INSERT INTO cash_flow_records
-        (disbursement_id, fund_source, transaction_type, amount, balance_before, balance_after, reference_id, notes)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-      `,
-      [disbursementId, fundSource, transactionType, amount, balanceBefore, balanceAfter, referenceId, notes]
-    );
+    await db.insert(cashFlowTable).values({
+      disbursementId: disbursementId ?? null,
+      fundSource: fundSource as any,
+      transactionType,
+      amount: amount.toString(),
+      balanceBefore: balanceBefore.toString(),
+      balanceAfter: balanceAfter.toString(),
+      referenceId,
+      notes: notes ?? null,
+    });
 
     // Update fund_sources table
+    const currentYear = new Date().getFullYear();
     if (transactionType === "ALLOCATION") {
-      await pool.query(
-        `
-        UPDATE fund_sources
-        SET allocated_amount = allocated_amount + $1
-        WHERE name = $2 AND cycle_year = EXTRACT(YEAR FROM NOW())
-        `,
-        [amount, fundSource]
-      );
+      await db.update(fundSourcesTable)
+        .set({
+          allocatedAmount: sql`${fundSourcesTable.allocatedAmount}::numeric + ${amount}`,
+        })
+        .where(and(
+          eq(fundSourcesTable.name, fundSource as any),
+          eq(fundSourcesTable.cycleYear, currentYear)
+        ));
     } else if (transactionType === "DISBURSEMENT") {
-      await pool.query(
-        `
-        UPDATE fund_sources
-        SET disbursed_amount = disbursed_amount + $1
-        WHERE name = $2 AND cycle_year = EXTRACT(YEAR FROM NOW())
-        `,
-        [amount, fundSource]
-      );
+      await db.update(fundSourcesTable)
+        .set({
+          disbursedAmount: sql`${fundSourcesTable.disbursedAmount}::numeric + ${amount}`,
+        })
+        .where(and(
+          eq(fundSourcesTable.name, fundSource as any),
+          eq(fundSourcesTable.cycleYear, currentYear)
+        ));
     }
   } catch (error) {
     console.error("Error recording cash flow:", error);
@@ -179,37 +186,35 @@ export const getCashFlowHistory = async (
   limit: number = 500
 ): Promise<CashFlowRecord[]> => {
   try {
-    const result = await pool.query(
-      `
-      SELECT
-        id,
-        fund_source,
-        transaction_type,
-        amount,
-        balance_before,
-        balance_after,
-        reference_id,
-        notes,
-        created_at
-      FROM cash_flow_records
-      WHERE fund_source = $1
-        AND EXTRACT(YEAR FROM created_at) = $2
-      ORDER BY created_at DESC
-      LIMIT $3
-      `,
-      [fundSource, cycleYear, limit]
-    );
+    const result = await db.select({
+      id: cashFlowTable.id,
+      fundSource: cashFlowTable.fundSource,
+      transactionType: cashFlowTable.transactionType,
+      amount: cashFlowTable.amount,
+      balanceBefore: cashFlowTable.balanceBefore,
+      balanceAfter: cashFlowTable.balanceAfter,
+      referenceId: cashFlowTable.referenceId,
+      notes: cashFlowTable.notes,
+      createdAt: cashFlowTable.createdAt,
+    })
+    .from(cashFlowTable)
+    .where(and(
+      eq(cashFlowTable.fundSource, fundSource as any),
+      sql`EXTRACT(YEAR FROM ${cashFlowTable.createdAt}) = ${cycleYear}`
+    ))
+    .orderBy(desc(cashFlowTable.createdAt))
+    .limit(limit);
 
-    return result.rows.map((row: any) => ({
+    return result.map((row) => ({
       id: row.id,
-      fundSource: row.fund_source,
-      transactionType: row.transaction_type,
+      fundSource: row.fundSource,
+      transactionType: row.transactionType,
       amount: parseFloat(row.amount),
-      balanceBefore: parseFloat(row.balance_before),
-      balanceAfter: parseFloat(row.balance_after),
-      referenceId: row.reference_id,
-      notes: row.notes,
-      createdAt: row.created_at,
+      balanceBefore: parseFloat(row.balanceBefore),
+      balanceAfter: parseFloat(row.balanceAfter),
+      referenceId: row.referenceId ?? "",
+      notes: row.notes ?? "",
+      createdAt: row.createdAt?.toISOString() ?? "",
     }));
   } catch (error) {
     console.error("Error getting cash flow history:", error);
@@ -222,22 +227,18 @@ export const getCashFlowHistory = async (
  */
 export const getCashFlowSummary = async (cycleYear: number) => {
   try {
-    const result = await pool.query(
-      `
-      SELECT
-        fund_source,
-        transaction_type,
-        COUNT(*) as transaction_count,
-        SUM(amount) as total_amount
-      FROM cash_flow_records
-      WHERE EXTRACT(YEAR FROM created_at) = $1
-      GROUP BY fund_source, transaction_type
-      ORDER BY fund_source, transaction_type
-      `,
-      [cycleYear]
-    );
+    const result = await db.select({
+      fundSource: cashFlowTable.fundSource,
+      transactionType: cashFlowTable.transactionType,
+      transactionCount: count(),
+      totalAmount: sum(cashFlowTable.amount),
+    })
+    .from(cashFlowTable)
+    .where(sql`EXTRACT(YEAR FROM ${cashFlowTable.createdAt}) = ${cycleYear}`)
+    .groupBy(cashFlowTable.fundSource, cashFlowTable.transactionType)
+    .orderBy(cashFlowTable.fundSource, cashFlowTable.transactionType);
 
-    return result.rows;
+    return result;
   } catch (error) {
     console.error("Error getting cash flow summary:", error);
     return [];
@@ -254,22 +255,20 @@ export const verifyDisbursementBudget = async (
   cycleYear: number
 ): Promise<boolean> => {
   try {
-    const result = await pool.query(
-      `
-      SELECT
-        budget_per_cycle,
-        allocated_amount
-      FROM fund_sources
-      WHERE name = $1
-        AND cycle_year = $2
-      `,
-      [fundSource, cycleYear]
-    );
+    const result = await db.select({
+      budgetPerCycle: fundSourcesTable.budgetPerCycle,
+      allocatedAmount: fundSourcesTable.allocatedAmount,
+    })
+    .from(fundSourcesTable)
+    .where(and(
+      eq(fundSourcesTable.name, fundSource as any),
+      eq(fundSourcesTable.cycleYear, cycleYear)
+    ));
 
-    if (result.rowCount === 0) return false;
+    if (result.length === 0) return false;
 
-    const budget = parseFloat(result.rows[0].budget_per_cycle);
-    const allocated = parseFloat(result.rows[0].allocated_amount);
+    const budget = parseFloat(result[0].budgetPerCycle);
+    const allocated = parseFloat(result[0].allocatedAmount ?? "0");
 
     return allocated + amount <= budget;
   } catch (error) {
@@ -287,38 +286,38 @@ export const generateCashFlowReport = async (
   endDate: Date
 ) => {
   try {
-    const allocations = await pool.query(
-      `
-      SELECT COUNT(*) as count, SUM(amount) as total
-      FROM cash_flow_records
-      WHERE fund_source = $1
-        AND transaction_type = 'ALLOCATION'
-        AND created_at BETWEEN $2 AND $3
-      `,
-      [fundSource, startDate, endDate]
-    );
+    const [allocations] = await db.select({
+      count: count(),
+      total: sum(cashFlowTable.amount),
+    })
+    .from(cashFlowTable)
+    .where(and(
+      eq(cashFlowTable.fundSource, fundSource as any),
+      eq(cashFlowTable.transactionType, "ALLOCATION"),
+      between(cashFlowTable.createdAt, startDate, endDate)
+    ));
 
-    const disbursements = await pool.query(
-      `
-      SELECT COUNT(*) as count, SUM(amount) as total
-      FROM cash_flow_records
-      WHERE fund_source = $1
-        AND transaction_type = 'DISBURSEMENT'
-        AND created_at BETWEEN $2 AND $3
-      `,
-      [fundSource, startDate, endDate]
-    );
+    const [disbursements] = await db.select({
+      count: count(),
+      total: sum(cashFlowTable.amount),
+    })
+    .from(cashFlowTable)
+    .where(and(
+      eq(cashFlowTable.fundSource, fundSource as any),
+      eq(cashFlowTable.transactionType, "DISBURSEMENT"),
+      between(cashFlowTable.createdAt, startDate, endDate)
+    ));
 
-    const reversals = await pool.query(
-      `
-      SELECT COUNT(*) as count, SUM(amount) as total
-      FROM cash_flow_records
-      WHERE fund_source = $1
-        AND transaction_type = 'REVERSAL'
-        AND created_at BETWEEN $2 AND $3
-      `,
-      [fundSource, startDate, endDate]
-    );
+    const [reversals] = await db.select({
+      count: count(),
+      total: sum(cashFlowTable.amount),
+    })
+    .from(cashFlowTable)
+    .where(and(
+      eq(cashFlowTable.fundSource, fundSource as any),
+      eq(cashFlowTable.transactionType, "REVERSAL"),
+      between(cashFlowTable.createdAt, startDate, endDate)
+    ));
 
     return {
       fundSource,
@@ -327,16 +326,16 @@ export const generateCashFlowReport = async (
         end: endDate,
       },
       allocations: {
-        count: parseInt(allocations.rows[0].count || 0),
-        total: parseFloat(allocations.rows[0].total || 0),
+        count: allocations.count,
+        total: parseFloat(allocations.total ?? "0"),
       },
       disbursements: {
-        count: parseInt(disbursements.rows[0].count || 0),
-        total: parseFloat(disbursements.rows[0].total || 0),
+        count: disbursements.count,
+        total: parseFloat(disbursements.total ?? "0"),
       },
       reversals: {
-        count: parseInt(reversals.rows[0].count || 0),
-        total: parseFloat(reversals.rows[0].total || 0),
+        count: reversals.count,
+        total: parseFloat(reversals.total ?? "0"),
       },
     };
   } catch (error) {
@@ -350,30 +349,28 @@ export const generateCashFlowReport = async (
  */
 export const getPendingDisbursements = async (fundSource: string) => {
   try {
-    const result = await pool.query(
-      `
-      SELECT
-        d.id as disbursement_id,
-        d.allocation_id,
-        a.id as application_id,
-        a.student_id,
-        s.full_name,
-        s.national_id,
-        a.amount_allocated,
-        d.amount,
-        d.status,
-        d.created_at
-      FROM disbursements d
-      JOIN applications a ON d.allocation_id = a.id
-      JOIN students s ON a.student_id = s.id
-      WHERE d.fund_source = $1
-        AND d.status IN ('PENDING', 'APPROVED')
-      ORDER BY d.created_at ASC
-      `,
-      [fundSource]
-    );
+    const result = await db.select({
+      disbursementId: disbursementsTable.id,
+      allocationId: disbursementsTable.allocationId,
+      applicationId: applicationsTable.id,
+      studentId: applicationsTable.studentId,
+      fullName: studentsTable.fullName,
+      nationalId: studentsTable.nationalId,
+      amountAllocated: applicationsTable.amountAllocated,
+      amount: disbursementsTable.amount,
+      status: disbursementsTable.status,
+      createdAt: disbursementsTable.createdAt,
+    })
+    .from(disbursementsTable)
+    .innerJoin(applicationsTable, eq(disbursementsTable.allocationId, applicationsTable.id))
+    .innerJoin(studentsTable, eq(applicationsTable.studentId, studentsTable.id))
+    .where(and(
+      eq(disbursementsTable.fundSource, fundSource as any),
+      inArray(disbursementsTable.status, ["PENDING", "APPROVED"] as any)
+    ))
+    .orderBy(disbursementsTable.createdAt);
 
-    return result.rows;
+    return result;
   } catch (error) {
     console.error("Error getting pending disbursements:", error);
     return [];

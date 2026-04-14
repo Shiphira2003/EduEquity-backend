@@ -1,5 +1,5 @@
 import { Response } from "express";
-import { HTTP_STATUS, ERROR_MESSAGES } from "./index";
+import { HTTP_STATUS, ERROR_MESSAGES } from "../constants";
 
 /**
  * Standard API Response Type

@@ -61,13 +61,13 @@ CREATE DATABASE cfg_db;
 
 ### 5. Set up database tables
 
-Run the full database setup (schema + migrations) in one command:
+Run the full database setup (schema + all migrations) in one command:
 
 ```bash
 npm run db:setup
 ```
 
-This creates all tables (`roles`, `users`, `students`, `applications`, `disbursements`, `audit_logs`, `password_resets`) and seeds the initial roles (`ADMIN`, `STUDENT`, `COMMITTEE`).
+This uses **Drizzle ORM** to create all tables and apply all incremental migrations (`001-009`) sequentially, then seeds initial roles.
 
 ### 6. Start the development server
 
@@ -86,9 +86,9 @@ The **first person to sign up** via `POST /api/auth/signup` automatically become
 | Script             | Description                                     |
 |--------------------|-------------------------------------------------|
 | `npm run dev`      | Start the dev server with hot reload            |
-| `npm run db:setup` | Run full database setup (schema + migrations)   |
-| `npm run db:migrate` | Run only the initial schema                   |
-| `npm run db:migrate:run` | Run only the migrations                  |
+| `npm run db:setup` | Run full database setup (schema + all migrations) |
+| `npm run db:migrate` | Run only the base schema (via Drizzle)        |
+| `npm run db:migrate:run` | Run all incremental migrations sequentially |
 
 ## API Routes
 
@@ -108,6 +108,7 @@ The **first person to sign up** via `POST /api/auth/signup` automatically become
 
 - **Runtime:** Node.js + TypeScript
 - **Framework:** Express 5
+- **ORM:** Drizzle ORM
 - **Database:** PostgreSQL (via `pg`)
 - **Auth:** JWT + bcrypt
 - **Email:** Nodemailer

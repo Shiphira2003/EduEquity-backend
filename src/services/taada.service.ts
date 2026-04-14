@@ -1,4 +1,11 @@
-import pool from "../db/db";
+import { db } from "../db/db";
+import {
+    applicationsTable,
+    studentsTable,
+    needAssessmentTable,
+    disbursementsTable,
+} from "../db/schema";
+import { eq, and, count, desc, asc, sql, lt, inArray } from "drizzle-orm";
 
 // ============================================
 // TAADA ALGORITHM - Tier-based Allocation
@@ -54,19 +61,16 @@ export const calculateTaadaFlag = async (
 ): Promise<TAadaFlagResult> => {
   try {
     // Check 1: Has this student been funded in THIS CYCLE for THIS BURSARY?
-    const duplicateCheck = await pool.query(
-      `
-      SELECT COUNT(*) as count FROM applications
-      WHERE student_id = $1
-        AND cycle_year = $2
-        AND bursary_type = $3
-        AND status IN ('APPROVED', 'PENDING')
-      LIMIT 1
-      `,
-      [studentId, cycleYear, bursaryType]
-    );
+    const [duplicateCheck] = await db.select({ value: count() })
+      .from(applicationsTable)
+      .where(and(
+        eq(applicationsTable.studentId, studentId),
+        eq(applicationsTable.cycleYear, cycleYear),
+        eq(applicationsTable.bursaryType, bursaryType as any),
+        inArray(applicationsTable.status, ["APPROVED", "PENDING"] as any)
+      ));
 
-    if (parseInt(duplicateCheck.rows[0].count) > 0) {
+    if (duplicateCheck.value > 0) {
       return {
         flag: "ALREADY_FUNDED",
         reason: `Already has ${bursaryType} application in cycle ${cycleYear}`,
@@ -74,19 +78,16 @@ export const calculateTaadaFlag = async (
     }
 
     // Check 2: Has this student been approved+disbursed PREVIOUSLY?
-    const previousFunding = await pool.query(
-      `
-      SELECT COUNT(*) as count FROM applications a
-      JOIN disbursements d ON a.id = d.allocation_id
-      WHERE a.student_id = $1
-        AND d.status = 'PROCESSED'
-        AND a.cycle_year < $2
-      LIMIT 1
-      `,
-      [studentId, cycleYear]
-    );
+    const previousFunding = await db.select({ value: count() })
+      .from(applicationsTable)
+      .innerJoin(disbursementsTable, eq(applicationsTable.id, disbursementsTable.allocationId))
+      .where(and(
+        eq(applicationsTable.studentId, studentId),
+        eq(disbursementsTable.status, "PROCESSED"),
+        lt(applicationsTable.cycleYear, cycleYear)
+      ));
 
-    if (parseInt(previousFunding.rows[0].count) > 0) {
+    if (previousFunding[0].value > 0) {
       return {
         flag: "ALREADY_FUNDED",
         reason: "Student has previously received processed disbursement",
@@ -94,17 +95,14 @@ export const calculateTaadaFlag = async (
     }
 
     // Check 3: Has student been REJECTED before?
-    const previousRejection = await pool.query(
-      `
-      SELECT COUNT(*) as count FROM applications
-      WHERE student_id = $1
-        AND status = 'REJECTED'
-      LIMIT 1
-      `,
-      [studentId]
-    );
+    const [previousRejection] = await db.select({ value: count() })
+      .from(applicationsTable)
+      .where(and(
+        eq(applicationsTable.studentId, studentId),
+        eq(applicationsTable.status, "REJECTED")
+      ));
 
-    if (parseInt(previousRejection.rows[0].count) > 0) {
+    if (previousRejection.value > 0) {
       return {
         flag: "REJECTED_BEFORE",
         reason: "Student was rejected in previous application",
@@ -139,21 +137,17 @@ export const calculateNeedScore = async (
 ): Promise<NeedScoreCalculation> => {
   try {
     // Get need assessment data
-    const assessment = await pool.query(
-      `
-      SELECT
-        family_income,
-        dependents,
-        orphaned,
-        disabled,
-        academic_score
-      FROM need_assessment
-      WHERE application_id = $1
-      `,
-      [applicationId]
-    );
+    const assessment = await db.select({
+      familyIncome: needAssessmentTable.familyIncome,
+      dependents: needAssessmentTable.dependents,
+      orphaned: needAssessmentTable.orphaned,
+      disabled: needAssessmentTable.disabled,
+      academicScore: needAssessmentTable.academicScore,
+    })
+    .from(needAssessmentTable)
+    .where(eq(needAssessmentTable.applicationId, applicationId));
 
-    if (assessment.rowCount === 0) {
+    if (assessment.length === 0) {
       // No need assessment - default to 50
       return {
         baseScore: 50,
@@ -169,7 +163,7 @@ export const calculateNeedScore = async (
       };
     }
 
-    const data = assessment.rows[0];
+    const data = assessment[0];
 
     // Calculate factors (all out of 100 initially, then weighted)
 
@@ -177,8 +171,8 @@ export const calculateNeedScore = async (
     // Lower income = higher need = higher score
     // Scale: <50k = 100, 50-100k = 80, 100-200k = 60, 200k+ = 40
     let familyIncomeFactor = 40;
-    if (data.family_income) {
-      const income = parseFloat(data.family_income);
+    if (data.familyIncome) {
+      const income = parseFloat(data.familyIncome);
       if (income < 50000) familyIncomeFactor = 100;
       else if (income < 100000) familyIncomeFactor = 80;
       else if (income < 200000) familyIncomeFactor = 60;
@@ -190,7 +184,7 @@ export const calculateNeedScore = async (
     // More dependents = higher need = higher score
     // Scale: 0 = 20, 1-2 = 40, 3-4 = 70, 5+ = 100
     let dependentsFactor = 20;
-    if (data.dependents !== undefined) {
+    if (data.dependents !== undefined && data.dependents !== null) {
       if (data.dependents === 0) dependentsFactor = 20;
       else if (data.dependents <= 2) dependentsFactor = 40;
       else if (data.dependents <= 4) dependentsFactor = 70;
@@ -210,8 +204,8 @@ export const calculateNeedScore = async (
     // 4. Academic Performance (15% weight - inverse)
     // Higher grades = slight bonus (helps tie-breaking)
     let academicFactor = 50; // Neutral
-    if (data.academic_score) {
-      const score = parseFloat(data.academic_score);
+    if (data.academicScore) {
+      const score = parseFloat(data.academicScore);
       // Scale: 0-40 = 30, 40-60 = 50, 60-80 = 70, 80-100 = 90
       if (score < 40) academicFactor = 30;
       else if (score < 60) academicFactor = 50;
@@ -271,45 +265,48 @@ export const getRankedApplications = async (
   limit: number = 100
 ): Promise<ApplicationRanking[]> => {
   try {
-    let query = `
-      SELECT
-        a.id as application_id,
-        a.student_id,
-        s.full_name,
-        a.need_score,
-        a.taada_flag,
-        a.amount_requested,
-        ROW_NUMBER() OVER (ORDER BY a.need_score DESC, a.created_at ASC) as rank
-      FROM applications a
-      JOIN students s ON a.student_id = s.id
-      WHERE a.cycle_year = $1
-        AND a.status = 'PENDING'
-    `;
-
-    const params: any[] = [cycleYear];
+    // Build query dynamically
+    let query = db.select({
+      applicationId: applicationsTable.id,
+      studentId: applicationsTable.studentId,
+      fullName: studentsTable.fullName,
+      needScore: applicationsTable.needScore,
+      taadaFlag: applicationsTable.taadaFlag,
+      amountRequested: applicationsTable.amountRequested,
+    })
+    .from(applicationsTable)
+    .innerJoin(studentsTable, eq(applicationsTable.studentId, studentsTable.id))
+    .$dynamic();
 
     if (bursaryType) {
-      query += ` AND a.bursary_type = $${params.length + 1}`;
-      params.push(bursaryType);
+      query = query.where(and(
+        eq(applicationsTable.cycleYear, cycleYear),
+        eq(applicationsTable.status, "PENDING"),
+        eq(applicationsTable.bursaryType, bursaryType as any)
+      ));
+    } else {
+      query = query.where(and(
+        eq(applicationsTable.cycleYear, cycleYear),
+        eq(applicationsTable.status, "PENDING")
+      ));
     }
 
-    query += ` ORDER BY a.need_score DESC, a.created_at ASC LIMIT $${params.length + 1}`;
-    params.push(limit);
-
-    const result = await pool.query(query, params);
+    const result = await query
+      .orderBy(desc(applicationsTable.needScore), asc(applicationsTable.createdAt))
+      .limit(limit);
 
     // Calculate recommended allocations based on ranking
-    const rankings: ApplicationRanking[] = result.rows.map((row: any) => ({
-      applicationId: row.application_id,
-      studentId: row.student_id,
-      studentName: row.full_name,
-      needScore: parseFloat(row.need_score),
-      taadaFlag: row.taada_flag,
-      rank: row.rank,
+    const rankings: ApplicationRanking[] = result.map((row, index) => ({
+      applicationId: row.applicationId,
+      studentId: row.studentId,
+      studentName: row.fullName,
+      needScore: parseFloat(row.needScore ?? "0"),
+      taadaFlag: row.taadaFlag ?? "FIRST_TIME",
+      rank: index + 1,
       recommendedAllocation: calculateRecommendedAllocation(
-        row.rank,
-        parseFloat(row.amount_requested),
-        parseFloat(row.need_score)
+        index + 1,
+        parseFloat(row.amountRequested),
+        parseFloat(row.needScore ?? "0")
       ),
     }));
 
@@ -357,18 +354,16 @@ export const checkAntiDuplication = async (
   bursaryType: string
 ): Promise<boolean> => {
   try {
-    const result = await pool.query(
-      `
-      SELECT COUNT(*) as count FROM applications
-      WHERE student_id = $1
-        AND cycle_year = $2
-        AND bursary_type = $3
-        AND status IN ('PENDING', 'APPROVED')
-      `,
-      [studentId, cycleYear, bursaryType]
-    );
+    const [result] = await db.select({ value: count() })
+      .from(applicationsTable)
+      .where(and(
+        eq(applicationsTable.studentId, studentId),
+        eq(applicationsTable.cycleYear, cycleYear),
+        eq(applicationsTable.bursaryType, bursaryType as any),
+        inArray(applicationsTable.status, ["PENDING", "APPROVED"] as any)
+      ));
 
-    return parseInt(result.rows[0].count) === 0; // True if no duplicates exist
+    return result.value === 0; // True if no duplicates exist
   } catch (error) {
     console.error("Error checking anti-duplication:", error);
     return false;
@@ -384,40 +379,38 @@ export const updateApplicationScores = async (
 ): Promise<{ taadaFlag: string; needScore: number }> => {
   try {
     // Get application details
-    const appResult = await pool.query(
-      `
-      SELECT student_id, cycle_year, bursary_type
-      FROM applications
-      WHERE id = $1
-      `,
-      [applicationId]
-    );
+    const appResult = await db.select({
+      studentId: applicationsTable.studentId,
+      cycleYear: applicationsTable.cycleYear,
+      bursaryType: applicationsTable.bursaryType,
+    })
+    .from(applicationsTable)
+    .where(eq(applicationsTable.id, applicationId));
 
-    if (appResult.rowCount === 0) {
+    if (appResult.length === 0) {
       throw new Error("Application not found");
     }
 
-    const app = appResult.rows[0];
+    const app = appResult[0];
 
     // Calculate TAADA flag
     const taadaResult = await calculateTaadaFlag(
-      app.student_id,
-      app.cycle_year,
-      app.bursary_type
+      app.studentId,
+      app.cycleYear,
+      app.bursaryType ?? "NATIONAL"
     );
 
     // Calculate need score
     const scoreResult = await calculateNeedScore(applicationId, taadaResult.flag);
 
     // Update application
-    await pool.query(
-      `
-      UPDATE applications
-      SET taada_flag = $1, need_score = $2, updated_at = NOW()
-      WHERE id = $3
-      `,
-      [taadaResult.flag, scoreResult.finalScore, applicationId]
-    );
+    await db.update(applicationsTable)
+      .set({
+        taadaFlag: taadaResult.flag as any,
+        needScore: scoreResult.finalScore.toString(),
+        updatedAt: new Date(),
+      })
+      .where(eq(applicationsTable.id, applicationId));
 
     return {
       taadaFlag: taadaResult.flag,

@@ -1,4 +1,7 @@
 import { Router, Request, Response, NextFunction } from "express";
+import { db } from "../db/db";
+import { applicationsTable, studentsTable } from "../db/schema";
+import { eq, and } from "drizzle-orm";
 import { authMiddleware, AuthRequest } from "../middleware/auth.middleware";
 import { roleMiddleware } from "../middleware/role.middleware";
 import { successResponse } from "../utils/response";
@@ -10,7 +13,7 @@ const router = Router();
    GET: Ranked applications for a cycle (TAADA Algorithm)
 ========================================================= */
 router.get(
-    "/cycle/:cycleYear/:bursaryType?",
+    ["/cycle/:cycleYear", "/cycle/:cycleYear/:bursaryType"],
     authMiddleware,
     roleMiddleware("admin", "committee"),
     async (req: Request, res: Response, next: NextFunction) => {
@@ -18,8 +21,8 @@ router.get(
             const { cycleYear, bursaryType } = req.params;
 
             const rankings = await getRankedApplications(
-                parseInt(cycleYear),
-                bursaryType || undefined,
+                parseInt(cycleYear as string, 10),
+                (bursaryType as string) || undefined,
                 100
             );
 
@@ -45,57 +48,55 @@ router.get(
     roleMiddleware("student"),
     async (req: AuthRequest, res: Response, next: NextFunction) => {
         try {
-            const { applicationId } = req.params;
+            const applicationId = parseInt(req.params.applicationId as string, 10);
             const userId = req.user!.userId;
 
-            // Get application details
-            const appResult = await pool.query(
-                `
-                SELECT
-                    a.id,
-                    a.student_id,
-                    a.cycle_year,
-                    a.bursary_type,
-                    a.need_score,
-                    a.taada_flag,
-                    a.amount_requested
-                FROM applications a
-                JOIN students s ON a.student_id = s.id
-                WHERE a.id = $1 AND s.user_id = $2
-                `,
-                [applicationId, userId]
-            );
+            // Get application details via Drizzle
+            const appResult = await db.select({
+                id: applicationsTable.id,
+                studentId: applicationsTable.studentId,
+                cycleYear: applicationsTable.cycleYear,
+                bursaryType: applicationsTable.bursaryType,
+                needScore: applicationsTable.needScore,
+                taadaFlag: applicationsTable.taadaFlag,
+                amountRequested: applicationsTable.amountRequested,
+            })
+            .from(applicationsTable)
+            .innerJoin(studentsTable, eq(applicationsTable.studentId, studentsTable.id))
+            .where(and(
+                eq(applicationsTable.id, applicationId),
+                eq(studentsTable.userId, userId)
+            ));
 
-            if (appResult.rowCount === 0) {
+            if (appResult.length === 0) {
                 return successResponse(res, "Application not found", null);
             }
 
-            const app = appResult.rows[0];
+            const app = appResult[0];
 
             // Get rankings for this cycle/bursary
             const rankings = await getRankedApplications(
-                app.cycle_year,
-                app.bursary_type
+                app.cycleYear,
+                app.bursaryType ?? undefined
             );
 
-            // Find student's rank
             const studentRanking = rankings.find(
-                (r: any) => r.applicationId === parseInt(applicationId)
+                (r: any) => r.applicationId === applicationId
             );
 
             successResponse(res, "Student ranking retrieved", {
-                applicationId: parseInt(applicationId),
-                studentId: app.student_id,
-                cycleYear: app.cycle_year,
-                bursaryType: app.bursary_type,
-                needScore: parseFloat(app.need_score),
-                taadaFlag: app.taada_flag,
-                amountRequested: parseFloat(app.amount_requested),
+                applicationId,
+                studentId: app.studentId,
+                cycleYear: app.cycleYear,
+                bursaryType: app.bursaryType,
+                needScore: parseFloat(app.needScore ?? "0"),
+                taadaFlag: app.taadaFlag,
+                amountRequested: parseFloat(app.amountRequested),
                 rank: studentRanking?.rank || null,
                 totalApplicants: rankings.length,
                 percentile:
                     studentRanking && rankings.length > 0
-                        ? Math.round(((studentRanking.rank / rankings.length) * 100))
+                        ? Math.round((studentRanking.rank / rankings.length) * 100)
                         : null,
                 recommendedAllocation: studentRanking?.recommendedAllocation || 0,
             });
@@ -104,7 +105,5 @@ router.get(
         }
     }
 );
-
-import pool from "../db/db";
 
 export default router;

@@ -1,5 +1,11 @@
 import { Router, Request, Response, NextFunction } from "express";
-import pool from "../db/db";
+import { db } from "../db/db";
+import {
+    applicationsTable,
+    studentsTable,
+    needAssessmentTable,
+} from "../db/schema";
+import { eq, and } from "drizzle-orm";
 import { authMiddleware, AuthRequest } from "../middleware/auth.middleware";
 import { roleMiddleware } from "../middleware/role.middleware";
 import { validateNeedAssessment } from "../middleware/validation";
@@ -19,7 +25,7 @@ router.post(
     validateNeedAssessment,
     async (req: AuthRequest, res: Response, next: NextFunction) => {
         try {
-            const { applicationId } = req.params;
+            const applicationId = parseInt(req.params.applicationId as string, 10);
             const userId = req.user!.userId;
             const {
                 family_income,
@@ -31,72 +37,51 @@ router.post(
             } = req.body;
 
             // Verify this application belongs to the student
-            const appCheck = await pool.query(
-                `
-                SELECT a.id FROM applications a
-                JOIN students s ON a.student_id = s.id
-                WHERE a.id = $1 AND s.user_id = $2
-                `,
-                [applicationId, userId]
-            );
+            const appCheck = await db.select({ id: applicationsTable.id })
+                .from(applicationsTable)
+                .innerJoin(studentsTable, eq(applicationsTable.studentId, studentsTable.id))
+                .where(and(
+                    eq(applicationsTable.id, applicationId),
+                    eq(studentsTable.userId, userId)
+                ));
 
-            if (appCheck.rowCount === 0) {
+            if (appCheck.length === 0) {
                 return errorResponse(res, "Application not found", HTTP_STATUS.NOT_FOUND);
             }
 
             // Check if assessment already exists
-            const existing = await pool.query(
-                `SELECT id FROM need_assessment WHERE application_id = $1`,
-                [applicationId]
-            );
+            const existing = await db.select({ id: needAssessmentTable.id })
+                .from(needAssessmentTable)
+                .where(eq(needAssessmentTable.applicationId, applicationId));
 
-            if (existing.rowCount > 0) {
+            if (existing.length > 0) {
                 // Update existing assessment
-                await pool.query(
-                    `
-                    UPDATE need_assessment
-                    SET family_income = $1,
-                        dependents = $2,
-                        orphaned = $3,
-                        disabled = $4,
-                        other_hardships = $5,
-                        academic_score = $6,
-                        updated_at = NOW()
-                    WHERE application_id = $7
-                    RETURNING *
-                    `,
-                    [
-                        family_income,
-                        dependents,
-                        orphaned,
-                        disabled,
-                        other_hardships,
-                        academic_score,
-                        applicationId,
-                    ]
-                );
+                await db.update(needAssessmentTable)
+                    .set({
+                        familyIncome: family_income?.toString() ?? null,
+                        dependents: dependents ? parseInt(dependents, 10) : 0,
+                        orphaned: orphaned === true || orphaned === "true",
+                        disabled: disabled === true || disabled === "true",
+                        otherHardships: other_hardships ?? null,
+                        academicScore: academic_score?.toString() ?? null,
+                        updatedAt: new Date(),
+                    })
+                    .where(eq(needAssessmentTable.applicationId, applicationId));
             } else {
                 // Insert new assessment
-                await pool.query(
-                    `
-                    INSERT INTO need_assessment
-                        (application_id, family_income, dependents, orphaned, disabled, other_hardships, academic_score)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7)
-                    `,
-                    [
-                        applicationId,
-                        family_income,
-                        dependents,
-                        orphaned,
-                        disabled,
-                        other_hardships,
-                        academic_score,
-                    ]
-                );
+                await db.insert(needAssessmentTable).values({
+                    applicationId,
+                    familyIncome: family_income?.toString() ?? null,
+                    dependents: dependents ? parseInt(dependents, 10) : 0,
+                    orphaned: orphaned === true || orphaned === "true",
+                    disabled: disabled === true || disabled === "true",
+                    otherHardships: other_hardships ?? null,
+                    academicScore: academic_score?.toString() ?? null,
+                });
             }
 
             // Recalculate TAADA scores
-            const scoreUpdate = await updateApplicationScores(parseInt(applicationId));
+            const scoreUpdate = await updateApplicationScores(applicationId);
 
             successResponse(
                 res,
@@ -122,34 +107,30 @@ router.get(
     authMiddleware,
     async (req: AuthRequest, res: Response, next: NextFunction) => {
         try {
-            const { applicationId } = req.params;
+            const applicationId = parseInt(req.params.applicationId as string, 10);
 
-            const result = await pool.query(
-                `
-                SELECT
-                    na.id,
-                    na.application_id,
-                    na.family_income,
-                    na.dependents,
-                    na.orphaned,
-                    na.disabled,
-                    na.other_hardships,
-                    na.academic_score,
-                    na.need_score_percentage,
-                    a.need_score,
-                    a.taada_flag
-                FROM need_assessment na
-                LEFT JOIN applications a ON na.application_id = a.id
-                WHERE na.application_id = $1
-                `,
-                [applicationId]
-            );
+            const result = await db.select({
+                id: needAssessmentTable.id,
+                applicationId: needAssessmentTable.applicationId,
+                familyIncome: needAssessmentTable.familyIncome,
+                dependents: needAssessmentTable.dependents,
+                orphaned: needAssessmentTable.orphaned,
+                disabled: needAssessmentTable.disabled,
+                otherHardships: needAssessmentTable.otherHardships,
+                academicScore: needAssessmentTable.academicScore,
+                needScorePercentage: needAssessmentTable.scorePercentage,
+                needScore: applicationsTable.needScore,
+                taadaFlag: applicationsTable.taadaFlag,
+            })
+            .from(needAssessmentTable)
+            .leftJoin(applicationsTable, eq(needAssessmentTable.applicationId, applicationsTable.id))
+            .where(eq(needAssessmentTable.applicationId, applicationId));
 
-            if (result.rowCount === 0) {
+            if (result.length === 0) {
                 return errorResponse(res, "Need assessment not found", HTTP_STATUS.NOT_FOUND);
             }
 
-            successResponse(res, "Need assessment retrieved", result.rows[0]);
+            successResponse(res, "Need assessment retrieved", result[0]);
         } catch (err) {
             next(err);
         }
@@ -165,34 +146,30 @@ router.get(
     roleMiddleware("admin"),
     async (req: Request, res: Response, next: NextFunction) => {
         try {
-            const { cycleYear } = req.params;
+            const cycleYear = parseInt(req.params.cycleYear as string, 10);
 
-            const result = await pool.query(
-                `
-                SELECT
-                    na.id,
-                    na.application_id,
-                    s.full_name,
-                    na.family_income,
-                    na.dependents,
-                    na.orphaned,
-                    na.disabled,
-                    na.academic_score,
-                    a.need_score,
-                    a.taada_flag,
-                    a.status
-                FROM need_assessment na
-                JOIN applications a ON na.application_id = a.id
-                JOIN students s ON a.student_id = s.id
-                WHERE a.cycle_year = $1
-                ORDER BY a.need_score DESC, a.created_at ASC
-                `,
-                [cycleYear]
-            );
+            const result = await db.select({
+                id: needAssessmentTable.id,
+                applicationId: needAssessmentTable.applicationId,
+                fullName: studentsTable.fullName,
+                familyIncome: needAssessmentTable.familyIncome,
+                dependents: needAssessmentTable.dependents,
+                orphaned: needAssessmentTable.orphaned,
+                disabled: needAssessmentTable.disabled,
+                academicScore: needAssessmentTable.academicScore,
+                needScore: applicationsTable.needScore,
+                taadaFlag: applicationsTable.taadaFlag,
+                status: applicationsTable.status,
+            })
+            .from(needAssessmentTable)
+            .innerJoin(applicationsTable, eq(needAssessmentTable.applicationId, applicationsTable.id))
+            .innerJoin(studentsTable, eq(applicationsTable.studentId, studentsTable.id))
+            .where(eq(applicationsTable.cycleYear, cycleYear))
+            .orderBy(applicationsTable.needScore);
 
             successResponse(res, "Assessments retrieved", {
-                count: result.rowCount,
-                assessments: result.rows,
+                count: result.length,
+                assessments: result,
             });
         } catch (err) {
             next(err);

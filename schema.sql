@@ -22,6 +22,7 @@ CREATE TABLE users (
     password_hash VARCHAR(255) NOT NULL,
     role_id INTEGER REFERENCES roles(id) ON DELETE SET NULL,
     is_active BOOLEAN DEFAULT TRUE,
+    is_verified BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -32,8 +33,15 @@ CREATE TABLE students (
     full_name VARCHAR(255) NOT NULL,
     national_id VARCHAR(50) UNIQUE NOT NULL,
     institution VARCHAR(255) NOT NULL,
-    course VARCHAR(255) NOT NULL,
+    education_level VARCHAR(50) DEFAULT 'TERTIARY',
+    course VARCHAR(255),
     year_of_study INTEGER NOT NULL,
+    school_bank_name VARCHAR(100),
+    school_account_number VARCHAR(100),
+    county VARCHAR(100),
+    constituency VARCHAR(100),
+    is_bank_locked BOOLEAN DEFAULT FALSE,
+    avatar VARCHAR(50),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -43,9 +51,13 @@ CREATE TABLE applications (
     student_id INTEGER REFERENCES students(id) ON DELETE CASCADE,
     cycle_year INTEGER NOT NULL,
     amount_requested DECIMAL(12, 2) NOT NULL,
+    fee_balance DECIMAL(12, 2) NOT NULL DEFAULT 0,
     amount_allocated DECIMAL(12, 2) DEFAULT 0,
     status VARCHAR(50) DEFAULT 'PENDING', -- PENDING, APPROVED, REJECTED
     taada_flag VARCHAR(50) DEFAULT 'FIRST_TIME', -- FIRST_TIME, ALREADY_FUNDED, REJECTED_BEFORE
+    bursary_type VARCHAR(50) DEFAULT 'NATIONAL',
+    county VARCHAR(100),
+    constituency VARCHAR(100),
     document_url TEXT, -- Stores JSON string of file paths
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

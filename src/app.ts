@@ -1,6 +1,7 @@
 // app.ts
 import express from "express";
 import cors from "cors";
+import cookieParser from "cookie-parser";
 import { errorHandler } from "./middleware/errorHandler";
 import usersRouter from "./routes/users";
 import studentsRouter from "./routes/students";
@@ -13,16 +14,18 @@ import announcementsRouter from "./routes/announcements";
 import assessmentsRouter from "./routes/assessments";
 import fundsourcesRouter from "./routes/fundsources";
 import rankingRouter from "./routes/ranking";
+import publicRouter from "./routes/public";
 
 const app = express();
 
 // ✅ CORS configuration
 app.use(cors({
-    origin: "http://localhost:5173", // your frontend URL
-    credentials: true,               // allow cookies/auth headers
+    origin: ["http://localhost:5173", "http://localhost:5174"], // your frontend URLs
+    credentials: true,                                       // allow cookies/auth headers
 }));
 
 app.use(express.json());
+app.use(cookieParser());
 
 app.use("/api/users", usersRouter);
 app.use("/api/students", studentsRouter);
@@ -32,12 +35,13 @@ app.use("/api/auth", authRouter);
 app.use("/api/admin", adminRouter);
 app.use("/api/notifications", notificationsRouter);
 app.use("/api/announcements", announcementsRouter);
-app.use("/api/assessments", assessmentsRouter);  // NEW - Need assessments
-app.use("/api/fundsources", fundsourcesRouter);  // NEW - Fund sources & cash flow
-app.use("/api/ranking", rankingRouter);          // NEW - TAADA rankings
+app.use("/api/assessments", assessmentsRouter);
+app.use("/api/fund-sources", fundsourcesRouter);
+app.use("/api/ranking", rankingRouter);
+app.use("/api/public", publicRouter);
 
 app.get("/", (req, res) => {
-    res.json({ message: "EduEquity API running" });
+    res.json({ message: "BursarHub API running" });
 });
 
 // ✅ Error handler middleware - MUST be last

@@ -1,5 +1,7 @@
-import { Router, Request, Response, NextFunction } from "express";
-import pool from "../db/db";
+import { Router, Response, NextFunction } from "express";
+import { db } from "../db/db";
+import { notificationsTable } from "../db/schema";
+import { eq, and, desc } from "drizzle-orm";
 import { authMiddleware, AuthRequest } from "../middleware/auth.middleware";
 
 const router = Router();
@@ -10,11 +12,13 @@ router.use(authMiddleware);
 router.get("/", async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
         const userId = req.user!.userId;
-        const result = await pool.query(
-            "SELECT * FROM notifications WHERE user_id = $1 ORDER BY created_at DESC",
-            [userId]
-        );
-        res.json(result.rows);
+
+        const result = await db.select()
+            .from(notificationsTable)
+            .where(eq(notificationsTable.userId, userId))
+            .orderBy(desc(notificationsTable.createdAt));
+
+        res.json(result);
     } catch (err) {
         next(err);
     }
@@ -24,15 +28,27 @@ router.get("/", async (req: AuthRequest, res: Response, next: NextFunction) => {
 router.patch("/:id/read", async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
         const userId = req.user!.userId;
-        const { id } = req.params;
-        const result = await pool.query(
-            "UPDATE notifications SET is_read = TRUE WHERE id = $1 AND user_id = $2 RETURNING *",
-            [id, userId]
-        );
-        if (result.rowCount === 0) {
+        const rawId = req.params.id;
+        const idParam = Array.isArray(rawId) ? rawId[0] : rawId;
+        const id = parseInt(idParam, 10);
+
+        if (Number.isNaN(id)) {
+            return res.status(400).json({ error: "Invalid notification id" });
+        }
+
+        const result = await db.update(notificationsTable)
+            .set({ isRead: true })
+            .where(and(
+                eq(notificationsTable.id, id),
+                eq(notificationsTable.userId, userId)
+            ))
+            .returning();
+
+        if (result.length === 0) {
             return res.status(404).json({ error: "Notification not found" });
         }
-        res.json(result.rows[0]);
+
+        res.json(result[0]);
     } catch (err) {
         next(err);
     }

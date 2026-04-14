@@ -1,5 +1,7 @@
 import { Router, Request, Response, NextFunction } from "express";
-import pool from "../db/db";
+import { db } from "../db/db";
+import { fundSourcesTable } from "../db/schema";
+import { desc, asc, eq, and } from "drizzle-orm";
 import { authMiddleware, AuthRequest } from "../middleware/auth.middleware";
 import { roleMiddleware } from "../middleware/role.middleware";
 import { validateFundSource } from "../middleware/validation";
@@ -16,6 +18,50 @@ import {
 
 const router = Router();
 
+router.get("/public", async (req: Request, res: Response, next: NextFunction) => {
+    try {
+        const result = await db.select({
+            id: fundSourcesTable.id,
+            name: fundSourcesTable.name,
+            description: fundSourcesTable.description,
+            budget_per_cycle: fundSourcesTable.budgetPerCycle,
+            cycle_year: fundSourcesTable.cycleYear,
+            is_open: fundSourcesTable.isOpen,
+            start_date: fundSourcesTable.startDate,
+            end_date: fundSourcesTable.endDate
+        })
+        .from(fundSourcesTable)
+        .orderBy(desc(fundSourcesTable.cycleYear), desc(fundSourcesTable.isOpen), asc(fundSourcesTable.name));
+
+        successResponse(res, "Public fund sources retrieved", result);
+    } catch (err) {
+        next(err);
+    }
+});
+
+// Preserve the old /open route just in case it's used elsewhere
+router.get("/open", async (req: Request, res: Response, next: NextFunction) => {
+    try {
+        const result = await db.select({
+            id: fundSourcesTable.id,
+            name: fundSourcesTable.name,
+            description: fundSourcesTable.description,
+            budget_per_cycle: fundSourcesTable.budgetPerCycle,
+            cycle_year: fundSourcesTable.cycleYear,
+            is_open: fundSourcesTable.isOpen,
+            start_date: fundSourcesTable.startDate,
+            end_date: fundSourcesTable.endDate
+        })
+        .from(fundSourcesTable)
+        .where(eq(fundSourcesTable.isOpen, true))
+        .orderBy(desc(fundSourcesTable.cycleYear), asc(fundSourcesTable.name));
+
+        successResponse(res, "Open fund sources retrieved", result);
+    } catch (err) {
+        next(err);
+    }
+});
+
 // Apply auth and admin role to all routes in this file
 router.use(authMiddleware, roleMiddleware("admin"));
 
@@ -25,8 +71,8 @@ router.use(authMiddleware, roleMiddleware("admin"));
 router.get("/balances/:cycleYear", async (req: Request, res: Response, next: NextFunction) => {
     try {
         const { cycleYear } = req.params;
-
-        const balances = await getFundSourceBalances(parseInt(cycleYear));
+        const cycleYearNum = parseInt(cycleYear as string, 10);
+        const balances = await getFundSourceBalances(cycleYearNum);
 
         if (balances.length === 0) {
             // Initialize fund sources if they don't exist
@@ -38,17 +84,25 @@ router.get("/balances/:cycleYear", async (req: Request, res: Response, next: Nex
             ];
 
             for (const source of fundSources) {
-                await pool.query(
-                    `
-                    INSERT INTO fund_sources (name, description, budget_per_cycle, cycle_year, allocated_amount, disbursed_amount)
-                    VALUES ($1, $2, $3, $4, 0, 0)
-                    ON CONFLICT DO NOTHING
-                    `,
-                    [source.name, source.description, source.budget, cycleYear]
-                );
+                const existing = await db.select({ id: fundSourcesTable.id })
+                    .from(fundSourcesTable)
+                    .where(and(
+                        eq(fundSourcesTable.name, source.name as any), 
+                        eq(fundSourcesTable.cycleYear, cycleYearNum)
+                    ));
+                if (existing.length === 0) {
+                    await db.insert(fundSourcesTable).values({
+                        name: source.name as any,
+                        description: source.description,
+                        budgetPerCycle: source.budget.toString(),
+                        cycleYear: cycleYearNum,
+                        allocatedAmount: "0",
+                        disbursedAmount: "0"
+                    });
+                }
             }
 
-            const newBalances = await getFundSourceBalances(parseInt(cycleYear));
+            const newBalances = await getFundSourceBalances(cycleYearNum);
             return successResponse(res, "Fund source balances retrieved", newBalances);
         }
 
@@ -66,8 +120,7 @@ router.get(
     async (req: Request, res: Response, next: NextFunction) => {
         try {
             const { fundSource, cycleYear } = req.params;
-
-            const history = await getCashFlowHistory(fundSource, parseInt(cycleYear), 500);
+            const history = await getCashFlowHistory(fundSource as string, parseInt(cycleYear as string, 10), 500);
 
             successResponse(res, "Cash flow history retrieved", {
                 fundSource,
@@ -87,9 +140,9 @@ router.get(
 router.get("/cashflow/summary/:cycleYear", async (req: Request, res: Response, next: NextFunction) => {
     try {
         const { cycleYear } = req.params;
-
-        const summary = await getCashFlowSummary(parseInt(cycleYear));
-        const balances = await getFundSourceBalances(parseInt(cycleYear));
+        const cycleYearNum = parseInt(cycleYear as string, 10);
+        const summary = await getCashFlowSummary(cycleYearNum);
+        const balances = await getFundSourceBalances(cycleYearNum);
 
         successResponse(res, "Cash flow summary retrieved", {
             cycleYear,
@@ -108,25 +161,24 @@ router.get("/config/:cycleYear", async (req: Request, res: Response, next: NextF
     try {
         const { cycleYear } = req.params;
 
-        const result = await pool.query(
-            `
-            SELECT
-                id,
-                name,
-                description,
-                budget_per_cycle,
-                allocated_amount,
-                disbursed_amount,
-                created_at,
-                updated_at
-            FROM fund_sources
-            WHERE cycle_year = $1
-            ORDER BY name
-            `,
-            [cycleYear]
-        );
+        const result = await db.select({
+            id: fundSourcesTable.id,
+            name: fundSourcesTable.name,
+            description: fundSourcesTable.description,
+            budget_per_cycle: fundSourcesTable.budgetPerCycle,
+            allocated_amount: fundSourcesTable.allocatedAmount,
+            disbursed_amount: fundSourcesTable.disbursedAmount,
+            is_open: fundSourcesTable.isOpen,
+            start_date: fundSourcesTable.startDate,
+            end_date: fundSourcesTable.endDate,
+            created_at: fundSourcesTable.createdAt,
+            updated_at: fundSourcesTable.updatedAt
+        })
+        .from(fundSourcesTable)
+        .where(eq(fundSourcesTable.cycleYear, parseInt(cycleYear as string, 10)))
+        .orderBy(asc(fundSourcesTable.name));
 
-        successResponse(res, "Fund source configuration retrieved", result.rows);
+        successResponse(res, "Fund source configuration retrieved", result);
     } catch (err) {
         next(err);
     }
@@ -141,25 +193,25 @@ router.put(
     async (req: Request, res: Response, next: NextFunction) => {
         try {
             const { fundSourceId } = req.params;
-            const { budget_per_cycle, description } = req.body;
+            const { budget_per_cycle, description, is_open, start_date, end_date } = req.body;
 
-            const result = await pool.query(
-                `
-                UPDATE fund_sources
-                SET budget_per_cycle = COALESCE($1, budget_per_cycle),
-                    description = COALESCE($2, description),
-                    updated_at = NOW()
-                WHERE id = $3
-                RETURNING *
-                `,
-                [budget_per_cycle, description, fundSourceId]
-            );
+            const updateData: any = { updatedAt: new Date() };
+            if (budget_per_cycle !== undefined) updateData.budgetPerCycle = budget_per_cycle.toString();
+            if (description !== undefined) updateData.description = description;
+            if (is_open !== undefined) updateData.isOpen = is_open;
+            if (start_date !== undefined) updateData.startDate = new Date(start_date);
+            if (end_date !== undefined) updateData.endDate = new Date(end_date);
 
-            if (result.rowCount === 0) {
+            const result = await db.update(fundSourcesTable)
+                .set(updateData)
+                .where(eq(fundSourcesTable.id, parseInt(fundSourceId as string, 10)))
+                .returning();
+
+            if (result.length === 0) {
                 return errorResponse(res, "Fund source not found", HTTP_STATUS.NOT_FOUND);
             }
 
-            successResponse(res, "Fund source updated", result.rows[0]);
+            successResponse(res, "Fund source updated", result[0]);
         } catch (err) {
             next(err);
         }
@@ -176,9 +228,9 @@ router.get(
             const { fundSource, startDate, endDate } = req.params;
 
             const report = await generateCashFlowReport(
-                fundSource,
-                new Date(startDate),
-                new Date(endDate)
+                fundSource as string,
+                new Date(startDate as string),
+                new Date(endDate as string)
             );
 
             if (!report) {
@@ -203,12 +255,11 @@ router.post(
             const { name, budget_per_cycle, cycle_year, description } = req.body;
 
             // Check if already exists
-            const existing = await pool.query(
-                `SELECT id FROM fund_sources WHERE name = $1 AND cycle_year = $2`,
-                [name, cycle_year]
-            );
+            const existing = await db.select({ id: fundSourcesTable.id })
+                .from(fundSourcesTable)
+                .where(and(eq(fundSourcesTable.name, name), eq(fundSourcesTable.cycleYear, parseInt(cycle_year))));
 
-            if (existing.rowCount > 0) {
+            if (existing.length > 0) {
                 return errorResponse(
                     res,
                     `Fund source ${name} already exists for cycle ${cycle_year}`,
@@ -216,16 +267,16 @@ router.post(
                 );
             }
 
-            const result = await pool.query(
-                `
-                INSERT INTO fund_sources (name, description, budget_per_cycle, cycle_year, allocated_amount, disbursed_amount)
-                VALUES ($1, $2, $3, $4, 0, 0)
-                RETURNING *
-                `,
-                [name, description, budget_per_cycle, cycle_year]
-            );
+            const result = await db.insert(fundSourcesTable).values({
+                name,
+                description,
+                budgetPerCycle: budget_per_cycle.toString(),
+                cycleYear: parseInt(cycle_year as string, 10),
+                allocatedAmount: "0",
+                disbursedAmount: "0"
+            }).returning();
 
-            successResponse(res, "Fund source created", result.rows[0], HTTP_STATUS.CREATED);
+            successResponse(res, "Fund source created", result[0], HTTP_STATUS.CREATED);
         } catch (err) {
             next(err);
         }
