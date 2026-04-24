@@ -1,4 +1,4 @@
-import { db } from "./src/db/db";
+import { db, pool } from "./src/db/db";
 import { usersTable, rolesTable, adminsTable } from "./src/db/schema";
 import { eq, or } from "drizzle-orm";
 import bcrypt from "bcrypt";
@@ -75,6 +75,8 @@ async function setupAdmins() {
     console.log("Admin setup completed successfully.");
   } catch (err: any) {
     console.error("Admin setup failed:", err.message);
+  } finally {
+    await pool.end();
   }
 }
 

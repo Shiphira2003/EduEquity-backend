@@ -10,7 +10,7 @@ interface EmailJob {
 class InMemoryQueue {
     private queue: EmailJob[] = [];
     private activeWorkers: number = 0;
-    private readonly MAX_CONCURRENT_EMAILS = 3;
+    private readonly MAX_CONCURRENT_EMAILS = 5;
 
     enqueue(job: EmailJob) {
         this.queue.push(job);

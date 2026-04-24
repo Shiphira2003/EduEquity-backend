@@ -2,8 +2,8 @@
  * Utility script to promote a user to SUPER_ADMIN role.
  * Usage: npx tsx scripts/promote_super_admin.ts <email>
  */
-import { db } from "../src/db/db";
-import { usersTable, rolesTable } from "../src/db/schema";
+import { db } from "../db/db";
+import { usersTable, rolesTable } from "../db/schema";
 import { eq } from "drizzle-orm";
 
 async function promoteUser(email: string) {

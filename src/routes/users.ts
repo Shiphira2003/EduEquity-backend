@@ -84,9 +84,7 @@ router.post(
             });
 
             // 4. Send Welcome Email
-            sendAdminWelcomeEmail(email, full_name, result.systemId, password).catch(err => {
-                console.error("Failed to send admin welcome email:", err);
-            });
+            sendAdminWelcomeEmail(email, full_name, result.systemId, password);
 
             res.status(201).json({
                 success: true,

@@ -1,4 +1,4 @@
-import { db } from './src/db/db';
+import { db, pool } from './src/db/db';
 import { usersTable, rolesTable } from './src/db/schema';
 import { eq } from 'drizzle-orm';
 
@@ -18,6 +18,7 @@ async function run() {
     } catch (err) {
         console.error('Database query failed:', err);
     } finally {
+        await pool.end();
         process.exit(0);
     }
 }

@@ -74,8 +74,7 @@ export const isValidYearOfStudy = (year: any): boolean => {
  */
 export const isValidCycleYear = (year: any): boolean => {
   const y = parseInt(year);
-  const currentYear = new Date().getFullYear();
-  return y >= currentYear && y <= currentYear + 5;
+  return y >= 2020 && y <= 2035;
 };
 
 /**

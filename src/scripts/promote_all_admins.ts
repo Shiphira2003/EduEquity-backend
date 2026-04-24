@@ -1,5 +1,5 @@
-import { db } from "../src/db/db";
-import { usersTable, rolesTable } from "../src/db/schema";
+import { db } from "../db/db";
+import { usersTable, rolesTable } from "../db/schema";
 import { eq } from "drizzle-orm";
 
 async function promoteAllAdmins() {
@@ -8,8 +8,8 @@ async function promoteAllAdmins() {
 
         // 1. Get roles
         const allRoles = await db.select().from(rolesTable);
-        const adminRole = allRoles.find(r => r.name === 'ADMIN');
-        const superAdminRole = allRoles.find(r => r.name === 'SUPER_ADMIN');
+        const adminRole = allRoles.find((r: any) => r.name === 'ADMIN');
+        const superAdminRole = allRoles.find((r: any) => r.name === 'SUPER_ADMIN');
 
         if (!adminRole || !superAdminRole) {
             console.error("ADMIN or SUPER_ADMIN role missing. Did you run migrations?");
@@ -26,7 +26,7 @@ async function promoteAllAdmins() {
             console.log("No ADMIN users found to promote.");
         } else {
             console.log(`Successfully promoted ${result.length} user(s) to SUPER_ADMIN:`);
-            result.forEach(u => console.log(` - ${u.email}`));
+            result.forEach((u: any) => console.log(` - ${u.email}`));
         }
         
         process.exit(0);

@@ -7,8 +7,7 @@ import { db } from "../db/db";
 import { usersTable, rolesTable, passwordResetsTable, otpVerificationsTable, studentsTable, adminsTable } from "../db/schema";
 import { eq, and, gt, count, desc } from "drizzle-orm";
 import { config } from "../config/config";
-import { sendEmail } from "../services/email.service";
-import { emailQueue } from "../services/queue.service";
+import { sendEmail, sendOTPEmail, sendPasswordResetEmail } from "../services/email.service";
 
 export const login = async (req: Request, res: Response) => {
     try {
@@ -102,6 +101,7 @@ export const login = async (req: Request, res: Response) => {
         }
 
         res.json({
+            token: accessToken,
             accessToken,
             user: {
                 id: user.id,
@@ -146,7 +146,10 @@ export const refresh = async (req: Request, res: Response) => {
                 { expiresIn: "15m" }
             );
 
-            res.json({ token: accessToken });
+            res.json({ 
+                token: accessToken,
+                accessToken 
+            });
         }
     );
 };
@@ -195,7 +198,7 @@ export const signup = async (req: Request, res: Response) => {
             passwordHash: hashedPassword,
             roleId,
             isActive: true,
-            isVerified: false
+            isVerified: true
         }).returning({
             id: usersTable.id,
             email: usersTable.email,
@@ -204,26 +207,40 @@ export const signup = async (req: Request, res: Response) => {
 
         const user = userResult[0];
 
-        // Generate 6-digit OTP
-        const otp = Math.floor(100000 + Math.random() * 900000).toString();
-        const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 mins expiry
+        // send Welcome Email notification instead of OTP
+        try {
+            const { sendWelcomeEmail } = require("../services/email.service");
+            sendWelcomeEmail(user.email, "User", "BursarHub Platform");
+        } catch (emailErr) {
+            console.error("Failed to send welcome email:", emailErr);
+        }
 
-        await db.insert(otpVerificationsTable).values({
-            email: user.email,
-            otp,
-            expiresAt
-        });
+        // Generate Tokens for seamless login
+        const accessToken = jwt.sign(
+            { userId: user.id, role: roleName, email: user.email },
+            config().jwtSecret,
+            { expiresIn: "15m" }
+        );
 
-        // Enqueue email
-        emailQueue.enqueue({
-            to: user.email,
-            subject: "Verify Your Email - BursarHub",
-            html: `<p>Welcome to BursarHub!</p><p>Your verification code is: <strong>${otp}</strong></p><p>This code will expire in 10 minutes.</p>`
+        const refreshToken = jwt.sign(
+            { userId: user.id, role: roleName, email: user.email },
+            config().jwtRefreshSecret,
+            { expiresIn: "7d" }
+        );
+
+        res.cookie('jwt', refreshToken, {
+            httpOnly: true, secure: process.env.NODE_ENV === "production", sameSite: 'lax', maxAge: 7 * 24 * 60 * 60 * 1000
         });
 
         return res.status(201).json({
-            message: `Account created successfully. Please check your email for the verification code.`,
-            email: user.email
+            message: `Account created successfully. Welcome to BursarHub!`,
+            token: accessToken,
+            accessToken,
+            user: {
+                id: user.id,
+                email: user.email,
+                role: roleName,
+            }
         });
     } catch (error) {
         console.error("Signup error:", error);
@@ -309,6 +326,7 @@ export const verifyOTP = async (req: Request, res: Response) => {
 
         res.json({
             message: "Email verified successfully!",
+            token: accessToken,
             accessToken,
             user: { 
                 id: user.id, 
@@ -339,11 +357,7 @@ export const resendOTP = async (req: Request, res: Response) => {
 
         await db.insert(otpVerificationsTable).values({ email, otp, expiresAt });
 
-        emailQueue.enqueue({
-            to: email,
-            subject: "New Verification Code - BursarHub",
-            html: `<p>Your new verification code is: <strong>${otp}</strong></p><p>This code will expire in 10 minutes.</p>`
-        });
+        sendOTPEmail(email, otp);
 
         res.json({ message: "A new OTP has been sent to your email." });
     } catch (err) {
@@ -380,17 +394,9 @@ export const forgotPassword = async (req: Request, res: Response) => {
             expiresAt
         });
 
-        // Send Email
+        // Send Email using the new template helper
         const resetLink = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/auth/reset-password?token=${token}`;
-        const emailHtml = `
-            <h3>Password Reset Request</h3>
-            <p>You requested a password reset. Click the link below to reset your password:</p>
-            <a href="${resetLink}">Reset Password</a>
-            <p>This link expires in 1 hour.</p>
-            <p>If you didn't request this, please ignore this email.</p>
-        `;
-
-        await sendEmail(email, "Password Reset Request", emailHtml);
+        sendPasswordResetEmail(email, resetLink);
 
         res.json({ message: "If an account with that email exists, a reset link has been sent." });
 

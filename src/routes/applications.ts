@@ -1,7 +1,7 @@
 import { Router, Request, Response, NextFunction } from "express";
 import { db } from "../db/db";
 import { usersTable, studentsTable, applicationsTable, fundSourcesTable, needAssessmentTable, notificationsTable, auditLogsTable, rolesTable, disbursementsTable, adminsTable } from "../db/schema";
-import { eq, and, desc, count, sql, exists } from "drizzle-orm";
+import { eq, and, desc, asc, count, sql, exists } from "drizzle-orm";
 import { upload } from "../middleware/upload";
 import { authMiddleware, AuthRequest } from "../middleware/auth.middleware";
 import { roleMiddleware } from "../middleware/role.middleware";
@@ -11,6 +11,7 @@ import {
     sendApplicationRejectedEmail
 } from "../services/email.service";
 import { updateApplicationScores, getRankedApplications, calculateNeedScore, checkAntiDuplication } from "../services/taada.service";
+import { recordCashFlow } from "../services/cashflow.service";
 
 const router = Router();
 
@@ -52,8 +53,14 @@ router.post(
                 });
             }
 
-            // Get student ID
-            const studentResult = await db.select({ id: studentsTable.id }).from(studentsTable).where(eq(studentsTable.userId, userId));
+            // Get student ID and status for snapshotting
+            const studentResult = await db.select({ 
+                id: studentsTable.id,
+                institution: studentsTable.institution,
+                course: studentsTable.course,
+                yearOfStudy: studentsTable.yearOfStudy,
+                educationLevel: studentsTable.educationLevel
+            }).from(studentsTable).where(eq(studentsTable.userId, userId));
 
             if (studentResult.length === 0) {
                 return res.status(403).json({
@@ -135,6 +142,11 @@ router.post(
                 constituency: constituency || null,
                 documentUrl: JSON.stringify(documentUrls),
                 feeBalance: fee_balance ? fee_balance.toString() : "0",
+                // Snapshotting current student status
+                institution: studentResult[0].institution || null,
+                course: studentResult[0].course || null,
+                yearOfStudy: studentResult[0].yearOfStudy || null,
+                educationLevel: studentResult[0].educationLevel || null,
             }).returning();
 
             console.log('✅ Application inserted, id:', insertResult[0].id);
@@ -219,7 +231,7 @@ router.post(
                 
                 if (studentEmailResult.length > 0) {
                     const { email, full_name } = studentEmailResult[0];
-                    sendApplicationSubmittedEmail(email, full_name, parseInt(cycle_year, 10)).catch(console.error);
+                    sendApplicationSubmittedEmail(email, full_name, parseInt(cycle_year, 10));
                 }
             } catch (emailErr: any) {
                 console.warn('⚠️  Email query failed (non-fatal):', emailErr.message);
@@ -298,16 +310,18 @@ router.get(
     roleMiddleware("admin", "committee"),
     async (req: Request, res: Response, next: NextFunction) => {
         try {
-            const { status, page = "1", limit = "10" } = req.query;
+            const { status, page = "1", limit = "10", sortField = "created_at", sortOrder = "desc", bursaryType } = req.query;
             const pageNum = parseInt(page as string, 10) || 1;
             const limitNum = parseInt(limit as string, 10) || 10;
             const offset = (pageNum - 1) * limitNum;
 
-            let baseQuery = db.select({ value: count() }).from(applicationsTable).$dynamic();
-            if (status) {
-                baseQuery = baseQuery.where(eq(applicationsTable.status, status as any));
-            }
-            const totalResult = await baseQuery;
+            let baseConditions = [];
+            if (status) baseConditions.push(eq(applicationsTable.status, status as any));
+            if (bursaryType) baseConditions.push(eq(applicationsTable.bursaryType, bursaryType as any));
+
+            const totalResult = await db.select({ value: count() })
+                .from(applicationsTable)
+                .where(baseConditions.length > 0 ? and(...baseConditions) : undefined);
             const total = totalResult[0].value;
 
             let query = db.select({
@@ -329,21 +343,26 @@ router.get(
             })
             .from(applicationsTable)
             .innerJoin(studentsTable, eq(applicationsTable.studentId, studentsTable.id))
-            .$dynamic();
+            .where(baseConditions.length > 0 ? and(...baseConditions) : undefined);
 
-            if (status) {
-                query = query.where(eq(applicationsTable.status, status as any));
-            }
-
-            const result = await query.orderBy(
-                sql`CASE applications.taada_flag
+            // Dynamic Sorting
+            let orderBySql: any;
+            if (sortField === 'need_score') {
+                orderBySql = sortOrder === 'asc' ? asc(applicationsTable.needScore) : desc(applicationsTable.needScore);
+            } else if (sortField === 'amount_requested') {
+                orderBySql = sortOrder === 'asc' ? asc(applicationsTable.amountRequested) : desc(applicationsTable.amountRequested);
+            } else if (sortField === 'taada_flag') {
+                orderBySql = sql`CASE applications.taada_flag
                     WHEN 'FIRST_TIME' THEN 1
                     WHEN 'REJECTED_BEFORE' THEN 2
                     WHEN 'ALREADY_FUNDED' THEN 3
                     ELSE 4
-                END`,
-                desc(applicationsTable.createdAt)
-            ).limit(limitNum).offset(offset);
+                END`;
+            } else {
+                orderBySql = sortOrder === 'asc' ? asc(applicationsTable.createdAt) : desc(applicationsTable.createdAt);
+            }
+
+            const result = await query.orderBy(orderBySql).limit(limitNum).offset(offset);
 
             const rows = result.map(row => {
                 let documents: string[] = [];
@@ -465,16 +484,31 @@ router.patch(
                 });
             }
 
-            const finalAmount = status === "APPROVED" ? amount_allocated : 0;
-
             const updateResult = await db.update(applicationsTable)
                 .set({
                     status: status as any,
-                    amountAllocated: finalAmount.toString(),
+                    amountAllocated: (amount_allocated || 0).toString(),
                     rejectionReason: rejection_reason || null
                 })
                 .where(eq(applicationsTable.id, parseInt(id)))
                 .returning();
+
+            // Record ALLOCATION in cash flow if approved
+            if (status === "APPROVED") {
+                const bursaryType = appResult[0].bursaryType || "NATIONAL";
+                try {
+                    await recordCashFlow(
+                        bursaryType,
+                        "ALLOCATION",
+                        amount_allocated,
+                        `APP-${id}`,
+                        `Approval of application #${id}`,
+                        undefined
+                    );
+                } catch (cfErr) {
+                    console.error("Failed to record allocation cash flow:", cfErr);
+                }
+            }
 
             await db.insert(auditLogsTable).values({
                 userId: admin_id,
@@ -486,7 +520,7 @@ router.patch(
                 }),
                 newValue: JSON.stringify({
                     status,
-                    amount_allocated: finalAmount,
+                    amount_allocated: amount_allocated,
                 }),
             });
 
@@ -500,9 +534,9 @@ router.patch(
             if (studentEmailRes.length > 0) {
                 const { email, full_name, cycle_year } = studentEmailRes[0];
                 if (status === "APPROVED") {
-                    sendApplicationApprovedEmail(email, full_name, cycle_year, finalAmount).catch(console.error);
+                    sendApplicationApprovedEmail(email, full_name, cycle_year, amount_allocated);
                 } else {
-                    sendApplicationRejectedEmail(email, full_name, cycle_year, rejection_reason || null).catch(console.error);
+                    sendApplicationRejectedEmail(email, full_name, cycle_year, rejection_reason || null);
                 }
             }
 
@@ -595,10 +629,10 @@ router.post(
                     if (studentRes.length > 0) {
                         const { email, full_name } = studentRes[0];
                         if (newStatus === "APPROVED") {
-                            sendApplicationApprovedEmail(email, full_name, cycle_year, allocation).catch(console.error);
+                            sendApplicationApprovedEmail(email, full_name, cycle_year, allocation);
                             approvedCount++;
                         } else {
-                            sendApplicationRejectedEmail(email, full_name, cycle_year, reason).catch(console.error);
+                            sendApplicationRejectedEmail(email, full_name, cycle_year, reason);
                             rejectedCount++;
                         }
                     }

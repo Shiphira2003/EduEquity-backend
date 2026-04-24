@@ -15,13 +15,21 @@ const router = Router();
 router.get(
     ["/cycle/:cycleYear", "/cycle/:cycleYear/:bursaryType"],
     authMiddleware,
-    roleMiddleware("admin", "committee"),
+    roleMiddleware("admin", "committee", "super_admin"),
     async (req: Request, res: Response, next: NextFunction) => {
         try {
             const { cycleYear, bursaryType } = req.params;
+            const yearNum = parseInt(cycleYear as string, 10);
+
+            if (isNaN(yearNum)) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Invalid cycle year provided."
+                });
+            }
 
             const rankings = await getRankedApplications(
-                parseInt(cycleYear as string, 10),
+                yearNum,
                 (bursaryType as string) || undefined,
                 100
             );

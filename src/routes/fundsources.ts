@@ -8,6 +8,7 @@ import { validateFundSource } from "../middleware/validation";
 import { successResponse, errorResponse } from "../utils/response";
 import { HTTP_STATUS } from "../constants";
 import {
+    initializeFundSources,
     getFundSourceBalances,
     recordCashFlow,
     getCashFlowHistory,
@@ -62,8 +63,8 @@ router.get("/open", async (req: Request, res: Response, next: NextFunction) => {
     }
 });
 
-// Apply auth and admin role to all routes in this file
-router.use(authMiddleware, roleMiddleware("admin"));
+// Apply auth and admin/super_admin role to all routes in this file
+router.use(authMiddleware, roleMiddleware("admin", "super_admin"));
 
 /* =========================================================
    GET: Fund source balances for a cycle
@@ -107,6 +108,27 @@ router.get("/balances/:cycleYear", async (req: Request, res: Response, next: Nex
         }
 
         successResponse(res, "Fund source balances retrieved", balances);
+    } catch (err) {
+        next(err);
+    }
+});
+
+/* =========================================================
+   POST: Initialize fund sources for a cycle
+========================================================= */
+router.post("/initialize", async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+        const { cycle_year } = req.body;
+        if (!cycle_year) {
+            return errorResponse(res, "cycle_year is required", HTTP_STATUS.BAD_REQUEST);
+        }
+
+        const cycleYearNum = parseInt(cycle_year as string, 10);
+        
+        await initializeFundSources(cycleYearNum);
+
+        const newBalances = await getFundSourceBalances(cycleYearNum);
+        successResponse(res, `Fund cycle ${cycle_year} initialized successfully`, newBalances, HTTP_STATUS.CREATED);
     } catch (err) {
         next(err);
     }

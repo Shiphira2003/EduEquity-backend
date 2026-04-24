@@ -1,5 +1,6 @@
 import nodemailer from 'nodemailer';
 import { config } from '../config/config';
+import { emailQueue } from './queue.service';
 
 // Create transporter lazily so that credentials are picked up after dotenv loads
 let _transporter: nodemailer.Transporter | null = null;
@@ -89,11 +90,11 @@ const baseLayout = (bodyContent: string) => `
 </html>`;
 
 // 1. Application Submitted
-export const sendApplicationSubmittedEmail = async (
+export const sendApplicationSubmittedEmail = (
     to: string,
     studentName: string,
     cycleYear: number
-): Promise<void> => {
+): void => {
     const subject = `Application Received – BursarHub ${cycleYear} Cycle`;
     const html = baseLayout(`
         <h2 style="color:${BRAND_BLUE};margin-top:0;">Application Received ✅</h2>
@@ -108,16 +109,16 @@ export const sendApplicationSubmittedEmail = async (
         </p>
         <p>Best Regards,<br/><strong>The BursarHub Team</strong></p>
     `);
-    return sendEmail(to, subject, html);
+    emailQueue.enqueue({ to, subject, html });
 };
 
 // 2. Application Approved
-export const sendApplicationApprovedEmail = async (
+export const sendApplicationApprovedEmail = (
     to: string,
     studentName: string,
     cycleYear: number,
     amountAllocated: number | string
-): Promise<void> => {
+): void => {
     const subject = `Congratulations! Your Application is Approved – BursarHub ${cycleYear}`;
     const html = baseLayout(`
         <h2 style="color:#16a34a;margin-top:0;">Application Approved 🎉</h2>
@@ -130,16 +131,16 @@ export const sendApplicationApprovedEmail = async (
         <p>The funds will be scheduled for disbursement to your institution shortly. You will receive another email confirmation when your payment has been processed.</p>
         <p>Congratulations,<br/><strong>The BursarHub Team</strong></p>
     `);
-    return sendEmail(to, subject, html);
+    emailQueue.enqueue({ to, subject, html });
 };
 
 // 3. Application Rejected
-export const sendApplicationRejectedEmail = async (
+export const sendApplicationRejectedEmail = (
     to: string,
     studentName: string,
     cycleYear: number,
     reason: string | null
-): Promise<void> => {
+): void => {
     const subject = `Update on Your Application – BursarHub ${cycleYear} Cycle`;
     const html = baseLayout(`
         <h2 style="color:#dc2626;margin-top:0;">Application Outcome</h2>
@@ -154,16 +155,16 @@ export const sendApplicationRejectedEmail = async (
         <p>We encourage you to apply again in the next funding cycle and ensure all required supporting documents are submitted.</p>
         <p>Sincerely,<br/><strong>The BursarHub Team</strong></p>
     `);
-    return sendEmail(to, subject, html);
+    emailQueue.enqueue({ to, subject, html });
 };
 
 // 4. Disbursement Completed
-export const sendDisbursementCompletedEmail = async (
+export const sendDisbursementCompletedEmail = (
     to: string,
     studentName: string,
     amount: number | string,
     refNumber: string | null
-): Promise<void> => {
+): void => {
     const subject = `Payment Disbursed – BursarHub Bursary`;
     const html = baseLayout(`
         <h2 style="color:${BRAND_BLUE};margin-top:0;">Funds Successfully Disbursed 💳</h2>
@@ -179,15 +180,15 @@ export const sendDisbursementCompletedEmail = async (
         <p>Please allow <strong>2–5 working days</strong> for the payment to reflect in your tuition/school fees account, depending on your institution's internal processing times.</p>
         <p>Best of luck in your studies!<br/><strong>The BursarHub Team</strong></p>
     `);
-    return sendEmail(to, subject, html);
+    emailQueue.enqueue({ to, subject, html });
 };
 
 // 5. Welcome / Account Created
-export const sendWelcomeEmail = async (
+export const sendWelcomeEmail = (
     to: string,
     studentName: string,
     institution: string
-): Promise<void> => {
+): void => {
     const subject = `Welcome to BursarHub — Account Created Successfully`;
     const html = baseLayout(`
         <h2 style="color:${BRAND_BLUE};margin-top:0;">Welcome to BursarHub! 🎓</h2>
@@ -213,14 +214,14 @@ export const sendWelcomeEmail = async (
         <p style="font-size:13px;color:#6b7280;">If you did not create this account, please ignore this email or contact our support team immediately.</p>
         <p>Best Regards,<br/><strong>The BursarHub Team</strong></p>
     `);
-    return sendEmail(to, subject, html);
+    emailQueue.enqueue({ to, subject, html });
 };
 
 // 6. Account Deactivated / Discontinued
-export const sendAccountDeactivatedEmail = async (
+export const sendAccountDeactivatedEmail = (
     to: string,
     userName: string
-): Promise<void> => {
+): void => {
     const subject = `Account Status Update – BursarHub`;
     const html = baseLayout(`
         <h2 style="color:#dc2626;margin-top:0;">Account Discontinued</h2>
@@ -236,16 +237,16 @@ export const sendAccountDeactivatedEmail = async (
         <p>If you believe this is an error, please contact the system Super Admin or your department head immediately.</p>
         <p>Thank you for your service.<br/><strong>The BursarHub Team</strong></p>
     `);
-    return sendEmail(to, subject, html);
+    emailQueue.enqueue({ to, subject, html });
 };
 
 // 7. Admin Welcome / Credentials
-export const sendAdminWelcomeEmail = async (
+export const sendAdminWelcomeEmail = (
     to: string,
     adminName: string,
     systemId: string,
     password: string
-): Promise<void> => {
+): void => {
     const subject = `Your Administrative Access — BursarHub`;
     const html = baseLayout(`
         <h2 style="color:${BRAND_BLUE};margin-top:0;">Administrative Access Granted 🛡️</h2>
@@ -278,5 +279,50 @@ export const sendAdminWelcomeEmail = async (
         </p>
         <p>Regards,<br/><strong>The BursarHub Team</strong></p>
     `);
-    return sendEmail(to, subject, html);
+    emailQueue.enqueue({ to, subject, html });
+};
+
+// 8. OTP Verification
+export const sendOTPEmail = (
+    to: string,
+    otp: string
+): void => {
+    const subject = `Your Verification Code – BursarHub`;
+    const html = baseLayout(`
+        <h2 style="color:${BRAND_BLUE};margin-top:0;">Verification Code 🔑</h2>
+        <p>You have requested a verification code to access your account.</p>
+        <div style="background:#f8fafc;border:2px dashed #cbd5e1;border-radius:12px;padding:24px;margin:24px 0;text-align:center;">
+          <p style="margin:0;font-size:13px;color:#64748b;text-transform:uppercase;letter-spacing:2px;">Your Code</p>
+          <p style="margin:12px 0 0;font-size:42px;font-weight:800;color:${BRAND_BLUE};letter-spacing:8px;font-family:monospace;">${otp}</p>
+        </div>
+        <p style="text-align:center;color:#64748b;font-size:14px;">This code will expire in <strong>10 minutes</strong>. If you did not request this, please ignore this email.</p>
+        <p>Regards,<br/><strong>The BursarHub Team</strong></p>
+    `);
+    emailQueue.enqueue({ to, subject, html });
+};
+
+// 9. Password Reset
+export const sendPasswordResetEmail = (
+    to: string,
+    resetLink: string
+): void => {
+    const subject = "Password Reset Request – BursarHub";
+    const html = baseLayout(`
+        <h2 style="color:${BRAND_BLUE};margin-top:0;">Reset Your Password 🔐</h2>
+        <p>We received a request to reset the password for your account.</p>
+        <p>Click the button below to choose a new password. This link is valid for <strong>1 hour</strong>.</p>
+        <p style="text-align:center;margin:32px 0;">
+          <a href="${resetLink}"
+             style="background:${BRAND_BLUE};color:#fff;padding:14px 32px;border-radius:8px;text-decoration:none;font-weight:600;font-size:15px;display:inline-block;">
+            Reset Password
+          </a>
+        </p>
+        <p style="font-size:13px;color:#64748b;line-height:1.6;">
+          If the button above doesn't work, copy and paste this link into your browser:<br/>
+          <span style="color:${BRAND_BLUE};word-break:break-all;">${resetLink}</span>
+        </p>
+        <p style="font-size:14px;color:#94a3b8;margin-top:24px;">If you did not request a password reset, no further action is required.</p>
+        <p>Regards,<br/><strong>The BursarHub Team</strong></p>
+    `);
+    emailQueue.enqueue({ to, subject, html });
 };

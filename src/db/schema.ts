@@ -93,6 +93,12 @@ export const studentsTable = pgTable(
     constituency: varchar("constituency", { length: 100 }),
     isBankLocked: boolean("is_bank_locked").default(false),
     avatar: varchar("avatar", { length: 50 }),
+    // Socioeconomic defaults for auto-fill
+    familyIncome: decimal("family_income", { precision: 12, scale: 2 }),
+    dependents: integer("dependents").default(0),
+    orphaned: boolean("orphaned").default(false),
+    disabled: boolean("disabled").default(false),
+    academicScore: decimal("academic_score", { precision: 5, scale: 2 }),
     createdAt: timestamp("created_at").defaultNow(),
   },
   (table) => ({
@@ -129,6 +135,11 @@ export const applicationsTable = pgTable(
     taadaFlag: taadaFlagEnum("taada_flag").default("FIRST_TIME"),
     documentUrl: text("document_url"), // Stores JSON string of file paths
     rejectionReason: varchar("rejection_reason", { length: 500 }), // NEW - Why rejected
+    // Snapshot of student status at time of application
+    institution: varchar("institution", { length: 255 }),
+    course: varchar("course", { length: 255 }),
+    yearOfStudy: integer("year_of_study"),
+    educationLevel: varchar("education_level", { length: 50 }),
     createdAt: timestamp("created_at").defaultNow(),
     updatedAt: timestamp("updated_at").defaultNow(),
   },

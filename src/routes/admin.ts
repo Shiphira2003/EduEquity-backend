@@ -14,6 +14,7 @@ import { upload } from "../middleware/upload";
 import { authMiddleware, AuthRequest } from "../middleware/auth.middleware";
 import { roleMiddleware } from "../middleware/role.middleware";
 import { sendDisbursementCompletedEmail } from "../services/email.service";
+import { recordCashFlow } from "../services/cashflow.service";
 
 const router = Router();
 
@@ -97,6 +98,28 @@ router.put("/profile", upload.single("image_icon"), async (req: AuthRequest, res
                 .returning();
             return res.json(updated[0]);
         }
+    } catch (err) {
+        next(err);
+    }
+});
+
+// ─────────────────────────────────────────────
+// 3. GET /api/admin/users
+// ─────────────────────────────────────────────
+router.get("/users", async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+        const result = await db.select({
+            id: usersTable.id,
+            email: usersTable.email,
+            role: rolesTable.name,
+            isActive: usersTable.isActive,
+            createdAt: usersTable.createdAt,
+        })
+        .from(usersTable)
+        .leftJoin(rolesTable, eq(usersTable.roleId, rolesTable.id))
+        .orderBy(desc(usersTable.createdAt));
+
+        res.json(result);
     } catch (err) {
         next(err);
     }
@@ -420,6 +443,38 @@ router.post("/disbursements", async (req: Request, res: Response, next: NextFunc
             fundSource: resolvedFundSource || "NATIONAL",
         }).returning();
 
+        // Record DISBURSEMENT in cash flow if PROCESSED immediately
+        if (status === "PROCESSED") {
+            try {
+                await recordCashFlow(
+                    resolvedFundSource || "NATIONAL",
+                    "DISBURSEMENT",
+                    amount,
+                    `DISB-${inserted[0].id}`,
+                    `Immediate disbursement recording`,
+                    inserted[0].id
+                );
+
+                // Send email notification for payment
+                const studentRes = await db.select({
+                    email: usersTable.email,
+                    fullName: studentsTable.fullName,
+                    amountAllocated: applicationsTable.amountAllocated,
+                })
+                .from(applicationsTable)
+                .innerJoin(studentsTable, eq(applicationsTable.studentId, studentsTable.id))
+                .innerJoin(usersTable, eq(studentsTable.userId, usersTable.id))
+                .where(eq(applicationsTable.id, allocation_id));
+
+                if (studentRes.length > 0) {
+                    const { email, fullName, amountAllocated } = studentRes[0];
+                    sendDisbursementCompletedEmail(email, fullName ?? "Student", amountAllocated ?? "0", null);
+                }
+            } catch (cfErr) {
+                console.error("Failed to record cash flow for disbursement:", cfErr);
+            }
+        }
+
         res.status(201).json(inserted[0]);
     } catch (err) {
         next(err);
@@ -446,12 +501,13 @@ router.put("/disbursements/:id", async (req: Request, res: Response, next: NextF
 
         if (updated.length === 0) return res.status(404).json({ error: "Disbursement not found" });
 
-        // Send email when status transitions to PROCESSED
+        // Send email when status transitions to PROCESSED and record cash flow
         if (status === "PROCESSED") {
             const studentRes = await db.select({
                 email: usersTable.email,
                 fullName: studentsTable.fullName,
                 amountAllocated: applicationsTable.amountAllocated,
+                fundSource: disbursementsTable.fundSource,
             })
             .from(disbursementsTable)
             .innerJoin(applicationsTable, eq(disbursementsTable.allocationId, applicationsTable.id))
@@ -460,8 +516,23 @@ router.put("/disbursements/:id", async (req: Request, res: Response, next: NextF
             .where(eq(disbursementsTable.id, id));
 
             if (studentRes.length > 0) {
-                const { email, fullName, amountAllocated } = studentRes[0];
-                sendDisbursementCompletedEmail(email, fullName ?? "Student", amountAllocated ?? "0", reference_number ?? null).catch(console.error);
+                const { email, fullName, amountAllocated, fundSource } = studentRes[0];
+                
+                // Record DISBURSEMENT cash flow
+                try {
+                    await recordCashFlow(
+                        fundSource || "NATIONAL",
+                        "DISBURSEMENT",
+                        amount || parseFloat(amountAllocated || "0"),
+                        `DISB-${id}`,
+                        `Disbursement processed: Ref ${reference_number || 'N/A'}`,
+                        id
+                    );
+                } catch (cfErr) {
+                    console.error("Failed to record cash flow for processed disbursement:", cfErr);
+                }
+
+                sendDisbursementCompletedEmail(email, fullName ?? "Student", amountAllocated ?? "0", reference_number ?? null);
             }
         }
 
@@ -519,7 +590,7 @@ router.patch("/users/:id/status", roleMiddleware("SUPER_ADMIN"), async (req: Req
             
             try {
                 const { sendAccountDeactivatedEmail } = require('../services/email.service');
-                await sendAccountDeactivatedEmail(result[0].email, userName);
+                sendAccountDeactivatedEmail(result[0].email, userName);
             } catch (err) {
                 console.error("Failed to send deactivation email:", err);
             }

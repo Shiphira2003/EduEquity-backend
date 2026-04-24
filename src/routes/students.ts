@@ -72,7 +72,9 @@ router.post("/register/student", async (req: Request, res: Response) => {
         const userResult = await db.insert(usersTable).values({
             email,
             passwordHash: hashedPassword,
-            roleId
+            roleId,
+            isActive: true,
+            isVerified: true
         }).returning({ id: usersTable.id, email: usersTable.email, roleId: usersTable.roleId });
 
         const user = userResult[0];
@@ -96,7 +98,7 @@ router.post("/register/student", async (req: Request, res: Response) => {
             student = studentResult[0];
 
             // Send welcome email (fire-and-forget)
-            sendWelcomeEmail(email, full_name, institution).catch(console.error);
+            sendWelcomeEmail(email, full_name, institution);
 
             // Notify all admins of the new registration
             const admins = await db.select({ id: usersTable.id })
@@ -159,6 +161,11 @@ router.get("/profile", async (req: Request, res: Response) => {
             county: studentsTable.county,
             constituency: studentsTable.constituency,
             isBankLocked: studentsTable.isBankLocked,
+            familyIncome: studentsTable.familyIncome,
+            dependents: studentsTable.dependents,
+            orphaned: studentsTable.orphaned,
+            disabled: studentsTable.disabled,
+            academicScore: studentsTable.academicScore,
             email: usersTable.email
         })
         .from(studentsTable)
@@ -191,7 +198,12 @@ router.put("/profile", async (req: Request, res: Response) => {
             schoolBankName,
             schoolAccountNumber,
             county,
-            constituency
+            constituency,
+            familyIncome,
+            dependents,
+            orphaned,
+            disabled,
+            academicScore
         } = req.body;
 
         const existing = await db.select({ id: studentsTable.id, isBankLocked: studentsTable.isBankLocked })
@@ -208,7 +220,12 @@ router.put("/profile", async (req: Request, res: Response) => {
             course,
             yearOfStudy,
             county,
-            constituency
+            constituency,
+            familyIncome,
+            dependents,
+            orphaned,
+            disabled,
+            academicScore
         };
 
         // Bank details can only be updated if not locked
