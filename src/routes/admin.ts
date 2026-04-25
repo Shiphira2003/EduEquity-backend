@@ -15,6 +15,7 @@ import { authMiddleware, AuthRequest } from "../middleware/auth.middleware";
 import { roleMiddleware } from "../middleware/role.middleware";
 import { sendDisbursementCompletedEmail } from "../services/email.service";
 import { recordCashFlow } from "../services/cashflow.service";
+import { notifySuperAdmins } from "../services/notification.service";
 
 const router = Router();
 
@@ -111,12 +112,11 @@ router.get("/users", async (req: AuthRequest, res: Response, next: NextFunction)
         const result = await db.select({
             id: usersTable.id,
             email: usersTable.email,
-            role: rolesTable.name,
+            role: usersTable.role,
             isActive: usersTable.isActive,
             createdAt: usersTable.createdAt,
         })
         .from(usersTable)
-        .leftJoin(rolesTable, eq(usersTable.roleId, rolesTable.id))
         .orderBy(desc(usersTable.createdAt));
 
         res.json(result);
@@ -166,8 +166,8 @@ router.get("/students", async (req: Request, res: Response, next: NextFunction) 
         const result = await db.select({
             id: studentsTable.id,
             userId: studentsTable.userId,
-            fullName: studentsTable.fullName,
-            nationalId: studentsTable.nationalId,
+            fullName: usersTable.fullName,
+            nationalId: usersTable.nationalId,
             institution: studentsTable.institution,
             educationLevel: studentsTable.educationLevel,
             course: studentsTable.course,
@@ -223,18 +223,17 @@ router.get("/audit-logs", async (req: Request, res: Response, next: NextFunction
             new_value: auditLogsTable.newValue,
             created_at: auditLogsTable.createdAt,
             admin_email: usersTable.email,
-            admin_role: rolesTable.name,
+            admin_role: usersTable.role,
             system_id: adminsTable.systemId
         })
         .from(auditLogsTable)
         .leftJoin(usersTable, eq(auditLogsTable.userId, usersTable.id))
-        .leftJoin(rolesTable, eq(usersTable.roleId, rolesTable.id))
         .leftJoin(adminsTable, eq(auditLogsTable.userId, adminsTable.userId))
         .orderBy(desc(auditLogsTable.createdAt));
 
         // If SUPER_ADMIN, filter strictly for actions taken by ADMINS
         if ((req as any).user?.role === 'SUPER_ADMIN') {
-            query.where(eq(rolesTable.name, 'ADMIN'));
+            query.where(eq(usersTable.role, 'ADMIN'));
         }
 
         const logs = await query;
@@ -259,11 +258,12 @@ router.get("/disbursements", async (req: Request, res: Response, next: NextFunct
             disbursed_at: disbursementsTable.disbursedAt,
             created_at: disbursementsTable.createdAt,
             student_id: applicationsTable.studentId,
-            student_name: studentsTable.fullName,
+            student_name: usersTable.fullName,
         })
         .from(disbursementsTable)
         .innerJoin(applicationsTable, eq(disbursementsTable.allocationId, applicationsTable.id))
         .innerJoin(studentsTable, eq(applicationsTable.studentId, studentsTable.id))
+        .innerJoin(usersTable, eq(studentsTable.userId, usersTable.id))
         .orderBy(desc(disbursementsTable.createdAt));
 
         res.json(result);
@@ -272,28 +272,6 @@ router.get("/disbursements", async (req: Request, res: Response, next: NextFunct
     }
 });
 
-// ─────────────────────────────────────────────
-// 7. GET /api/admin/users
-// ─────────────────────────────────────────────
-router.get("/users", async (req: Request, res: Response, next: NextFunction) => {
-    try {
-        const result = await db.select({
-            id: usersTable.id,
-            email: usersTable.email,
-            role: rolesTable.name,
-            isActive: usersTable.isActive,
-            isVerified: usersTable.isVerified,
-            createdAt: usersTable.createdAt,
-        })
-        .from(usersTable)
-        .leftJoin(rolesTable, eq(usersTable.roleId, rolesTable.id))
-        .orderBy(desc(usersTable.createdAt));
-
-        res.json(result);
-    } catch (err) {
-        next(err);
-    }
-});
 
 // ─────────────────────────────────────────────
 // CRUD: Students
@@ -475,6 +453,10 @@ router.post("/disbursements", async (req: Request, res: Response, next: NextFunc
             }
         }
 
+        // Notify Super Admin
+        const adminEmail = (req as any).user?.email || 'An Admin';
+        notifySuperAdmins(`${adminEmail} created a new disbursement of KES ${amount} (Status: ${status || "PENDING"}).`);
+
         res.status(201).json(inserted[0]);
     } catch (err) {
         next(err);
@@ -535,6 +517,10 @@ router.put("/disbursements/:id", async (req: Request, res: Response, next: NextF
                 sendDisbursementCompletedEmail(email, fullName ?? "Student", amountAllocated ?? "0", reference_number ?? null);
             }
         }
+
+        // Notify Super Admin
+        const adminEmail = (req as any).user?.email || 'An Admin';
+        notifySuperAdmins(`${adminEmail} updated disbursement #${id} to status ${status || 'Unknown'}.`);
 
         res.json(updated[0]);
     } catch (err) {

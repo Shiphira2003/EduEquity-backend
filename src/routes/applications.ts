@@ -10,6 +10,7 @@ import {
     sendApplicationApprovedEmail,
     sendApplicationRejectedEmail
 } from "../services/email.service";
+import { notifySuperAdmins } from "../services/notification.service";
 import { updateApplicationScores, getRankedApplications, calculateNeedScore, checkAntiDuplication } from "../services/taada.service";
 import { recordCashFlow } from "../services/cashflow.service";
 
@@ -207,8 +208,7 @@ router.post(
             try {
                 const admins = await db.select({ id: usersTable.id })
                     .from(usersTable)
-                    .leftJoin(rolesTable, eq(usersTable.roleId, rolesTable.id))
-                    .where(eq(rolesTable.name, "ADMIN"));
+                    .where(eq(usersTable.role, "ADMIN"));
 
                 if (admins.length > 0) {
                     const notifications = admins.map(a => ({
@@ -327,8 +327,8 @@ router.get(
             let query = db.select({
                 id: applicationsTable.id,
                 student_id: applicationsTable.studentId,
-                full_name: studentsTable.fullName,
-                national_id: studentsTable.nationalId,
+                full_name: usersTable.fullName,
+                national_id: usersTable.nationalId,
                 institution: studentsTable.institution,
                 course: studentsTable.course,
                 year_of_study: studentsTable.yearOfStudy,
@@ -343,6 +343,7 @@ router.get(
             })
             .from(applicationsTable)
             .innerJoin(studentsTable, eq(applicationsTable.studentId, studentsTable.id))
+            .innerJoin(usersTable, eq(studentsTable.userId, usersTable.id))
             .where(baseConditions.length > 0 ? and(...baseConditions) : undefined);
 
             // Dynamic Sorting
@@ -524,6 +525,10 @@ router.patch(
                 }),
             });
 
+            // Notify Super Admin
+            const adminEmail = (req.user as any).email || 'An Admin';
+            notifySuperAdmins(`${adminEmail} has ${status === 'APPROVED' ? 'approved' : 'rejected'} application #${id}`);
+
             // Send email to student
             const studentEmailRes = await db.select({ email: usersTable.email, full_name: studentsTable.fullName, cycle_year: applicationsTable.cycleYear })
                 .from(applicationsTable)
@@ -640,6 +645,10 @@ router.post(
                     console.error("Failed to send automated email:", emailErr);
                 }
             }
+
+            // Notify Super Admin of bulk action
+            const adminEmail = (req.user as any).email || 'An Admin';
+            notifySuperAdmins(`${adminEmail} auto-evaluated the ${cycle_year} cycle. Approved: ${approvedCount}, Rejected: ${rejectedCount}.`);
 
             res.json({
                 success: true,

@@ -17,20 +17,19 @@ export const login = async (req: Request, res: Response) => {
             return res.status(400).json({ message: "Email and password are required" });
         }
 
-        // Find user
+        // Find user with unified identity fields
         const userResult = await db.select({
             id: usersTable.id,
             email: usersTable.email,
             password_hash: usersTable.passwordHash,
             isActive: usersTable.isActive,
             isVerified: usersTable.isVerified,
-            role_id: usersTable.roleId,
-            role: rolesTable.name,
-            systemId: adminsTable.systemId
+            role: usersTable.role, // Unified role
+            fullName: usersTable.fullName, // Unified name
+            systemId: usersTable.systemId, // Unified systemId
+            avatar: usersTable.avatar // Unified avatar
         })
         .from(usersTable)
-        .leftJoin(rolesTable, eq(usersTable.roleId, rolesTable.id))
-        .leftJoin(adminsTable, eq(usersTable.id, adminsTable.userId))
         .where(eq(usersTable.email, email));
 
         if (userResult.length === 0) {
@@ -57,13 +56,13 @@ export const login = async (req: Request, res: Response) => {
 
         // Generate Tokens
         const accessToken = jwt.sign(
-            { userId: user.id, role: user.role, email: user.email, systemId: user.systemId },
+            { userId: user.id, role: user.role, email: user.email, systemId: user.systemId || "" },
             config().jwtSecret,
             { expiresIn: "15m" }
         );
 
         const refreshToken = jwt.sign(
-            { userId: user.id, role: user.role, email: user.email, systemId: user.systemId },
+            { userId: user.id, role: user.role, email: user.email, systemId: user.systemId || "" },
             config().jwtRefreshSecret,
             { expiresIn: "7d" }
         );
@@ -75,31 +74,6 @@ export const login = async (req: Request, res: Response) => {
             maxAge: 7 * 24 * 60 * 60 * 1000 // cookie expiry: set to match rT
         });
 
-        // Fetch profile details based on role
-        let fullName = "";
-        let avatar = "";
-        const systemId = user.systemId || "";
-
-        if (user.role === "STUDENT") {
-            const student = await db.select({ fullName: studentsTable.fullName, avatar: studentsTable.avatar })
-                .from(studentsTable)
-                .where(eq(studentsTable.userId, user.id))
-                .limit(1);
-            if (student.length > 0) {
-                fullName = student[0].fullName;
-                avatar = student[0].avatar || "";
-            }
-        } else if (user.role === "ADMIN" || user.role === "SUPER_ADMIN") {
-            const admin = await db.select({ fullName: adminsTable.fullName, avatar: adminsTable.imageIcon })
-                .from(adminsTable)
-                .where(eq(adminsTable.userId, user.id))
-                .limit(1);
-            if (admin.length > 0) {
-                fullName = admin[0].fullName || "";
-                avatar = admin[0].avatar || "";
-            }
-        }
-
         res.json({
             token: accessToken,
             accessToken,
@@ -107,9 +81,9 @@ export const login = async (req: Request, res: Response) => {
                 id: user.id,
                 email: user.email,
                 role: user.role,
-                fullName,
-                avatar,
-                systemId
+                fullName: user.fullName || "",
+                systemId: user.systemId || "",
+                avatar: user.avatar || ""
             }
         });
     } catch (error) {
@@ -131,9 +105,8 @@ export const refresh = async (req: Request, res: Response) => {
         async (err: any, decoded: any) => {
             if (err) return res.status(403).json({ message: "Forbidden" });
 
-            const userResult = await db.select({ id: usersTable.id, email: usersTable.email, role_id: usersTable.roleId, role: rolesTable.name })
+            const userResult = await db.select({ id: usersTable.id, email: usersTable.email, role: usersTable.role })
                 .from(usersTable)
-                .leftJoin(rolesTable, eq(usersTable.roleId, rolesTable.id))
                 .where(eq(usersTable.email, decoded.email));
 
             if (userResult.length === 0) return res.status(401).json({ message: "Unauthorized" });
@@ -179,16 +152,10 @@ export const signup = async (req: Request, res: Response) => {
             return res.status(400).json({ message: "Email already exists" });
         }
 
-        // Determine role: first user becomes ADMIN, everyone else STUDENT
+        // Determine role: first user becomes SUPER_ADMIN, everyone else STUDENT
         const countResult = await db.select({ value: count() }).from(usersTable);
         const userCount = countResult[0].value;
         const roleName = userCount === 0 ? "SUPER_ADMIN" : "STUDENT";
-
-        const roleResult = await db.select({ id: rolesTable.id }).from(rolesTable).where(eq(rolesTable.name, roleName));
-        if (roleResult.length === 0) {
-            return res.status(500).json({ message: `Role ${roleName} not found in database` });
-        }
-        const roleId = roleResult[0].id;
 
         // Hash password and insert user
         const hashedPassword = await bcrypt.hash(password, 10);
@@ -196,13 +163,13 @@ export const signup = async (req: Request, res: Response) => {
         const userResult = await db.insert(usersTable).values({
             email,
             passwordHash: hashedPassword,
-            roleId,
+            role: roleName,
             isActive: true,
             isVerified: true
-        }).returning({
+        } as any).returning({
             id: usersTable.id,
             email: usersTable.email,
-            roleId: usersTable.roleId
+            role: usersTable.role
         });
 
         const user = userResult[0];
@@ -275,8 +242,8 @@ export const verifyOTP = async (req: Request, res: Response) => {
         const userResult = await db.select({
             id: usersTable.id,
             email: usersTable.email,
-            role: rolesTable.name
-        }).from(usersTable).leftJoin(rolesTable, eq(usersTable.roleId, rolesTable.id)).where(eq(usersTable.email, email));
+            role: usersTable.role
+        }).from(usersTable).where(eq(usersTable.email, email));
 
         const user = userResult[0];
 

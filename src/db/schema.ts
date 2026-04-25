@@ -24,6 +24,7 @@ export const applicationStatusEnum = pgEnum("applicationStatus", [
   "PENDING",
   "APPROVED",
   "REJECTED",
+  "COMPLETED",
 ]);
 
 export const taadaFlagEnum = pgEnum("taadaFlag", [
@@ -61,15 +62,18 @@ export const usersTable = pgTable(
     id: serial("id").primaryKey(),
     email: varchar("email", { length: 255 }).notNull().unique(),
     passwordHash: varchar("password_hash", { length: 255 }).notNull(),
-    roleId: integer("role_id").references(() => rolesTable.id, {
-      onDelete: "set null",
-    }),
+    role: varchar("role", { length: 50 }).default("STUDENT"), // High-performance role field
+    fullName: varchar("full_name", { length: 255 }),
+    nationalId: varchar("national_id", { length: 50 }),
+    systemId: varchar("system_id", { length: 50 }),
+    avatar: text("avatar"),
     isActive: boolean("is_active").default(true),
     isVerified: boolean("is_verified").default(false),
     createdAt: timestamp("created_at").defaultNow(),
   },
   (table) => ({
     emailIdx: uniqueIndex("users_email_idx").on(table.email),
+    nationalIdIdx: uniqueIndex("users_national_id_idx").on(table.nationalId),
   })
 );
 
@@ -301,6 +305,7 @@ export const announcementsTable = pgTable(
     id: serial("id").primaryKey(),
     title: varchar("title", { length: 255 }).notNull(),
     message: text("message").notNull(),
+    targetAudience: varchar("target_audience", { length: 50 }).default("STUDENTS"),
     createdBy: integer("created_by").references(() => usersTable.id, { onDelete: "set null" }),
     createdAt: timestamp("created_at").defaultNow(),
   }
@@ -325,6 +330,17 @@ export const adminsTable = pgTable(
   })
 );
 
+// 14. Admin Community Messages Table
+export const adminCommunityMessagesTable = pgTable(
+  "admin_community_messages",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("user_id").notNull().references(() => usersTable.id, { onDelete: "cascade" }),
+    message: text("message").notNull(),
+    createdAt: timestamp("created_at").defaultNow(),
+  }
+);
+
 // 13. OTP Verifications Table
 export const otpVerificationsTable = pgTable(
   "otp_verifications",
@@ -340,16 +356,28 @@ export const otpVerificationsTable = pgTable(
   })
 );
 
+// 15. Payments Table (Stripe processing)
+export const paymentsTable = pgTable("payments", {
+  id: serial("id").primaryKey(),
+  applicationId: integer("application_id").notNull().references(() => applicationsTable.id, { onDelete: "cascade" }),
+  userId: integer("user_id").notNull().references(() => usersTable.id, { onDelete: "cascade" }),
+  amount: decimal("amount", { precision: 12, scale: 2 }).notNull(),
+  paymentStatus: varchar("payment_status", { length: 50 }).notNull().default("PENDING"),
+  transactionId: varchar("transaction_id", { length: 255 }),
+  paymentMethod: varchar("payment_method", { length: 100 }),
+  paymentDate: timestamp("payment_date"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export type TPaymentSelect = typeof paymentsTable.$inferSelect;
+export type TPaymentInsert = typeof paymentsTable.$inferInsert;
+
 // ============================================
 // RELATIONS
 // ============================================
 
 // User Relations
 export const usersRelations = relations(usersTable, ({ one, many }) => ({
-  role: one(rolesTable, {
-    fields: [usersTable.roleId],
-    references: [rolesTable.id],
-  }),
   student: one(studentsTable, {
     fields: [usersTable.id],
     references: [studentsTable.userId],
@@ -362,7 +390,6 @@ export const usersRelations = relations(usersTable, ({ one, many }) => ({
 
 // Role Relations
 export const rolesRelations = relations(rolesTable, ({ many }) => ({
-  users: many(usersTable),
 }));
 
 // Student Relations

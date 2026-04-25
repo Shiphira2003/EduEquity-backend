@@ -15,14 +15,36 @@ import assessmentsRouter from "./routes/assessments";
 import fundsourcesRouter from "./routes/fundsources";
 import rankingRouter from "./routes/ranking";
 import publicRouter from "./routes/public";
+import communityRouter from "./routes/community";
+import { paymentRouter } from "./routes/payments/payments.routes";
 
 const app = express();
 
+// Webhooks MUST run before express.json() is universally parsed.
+// In payments.routes.ts, /webhook already has express.raw injected if mounted correctly,
+// but usually it's cleaner to mount the raw route before express.json() globally.
+// However, since we placed express.raw as a middleware inside the router,
+// we just need to use the router *before* express.json() if it overlaps, OR
+// exclude /api/payments/webhook from express.json().
+
+// Better: Webhook specifically bypassed:
+app.use('/api/payments/webhook', express.raw({ type: 'application/json' }));
+
 // ✅ CORS configuration
 app.use(cors({
-    origin: ["http://localhost:5173", "http://localhost:5174"], // your frontend URLs
-    credentials: true,                                       // allow cookies/auth headers
+    origin: ["http://localhost:5173", "http://localhost:5174"],
+    credentials: true,
 }));
+
+app.use((req, res, next) => {
+    if (req.originalUrl === '/api/payments/webhook') {
+        next();
+    } else {
+        express.json()(req, res, next);
+    }
+});
+
+app.use(cookieParser());
 
 // ✅ Request Logger
 app.use((req, res, next) => {
@@ -33,9 +55,6 @@ app.use((req, res, next) => {
     });
     next();
 });
-
-app.use(express.json());
-app.use(cookieParser());
 
 app.use("/api/users", usersRouter);
 app.use("/api/students", studentsRouter);
@@ -49,6 +68,8 @@ app.use("/api/assessments", assessmentsRouter);
 app.use("/api/fund-sources", fundsourcesRouter);
 app.use("/api/ranking", rankingRouter);
 app.use("/api/public", publicRouter);
+app.use("/api/community", communityRouter);
+app.use("/api/payments", paymentRouter);
 
 app.get("/", (req, res) => {
     res.json({ message: "BursarHub API running" });

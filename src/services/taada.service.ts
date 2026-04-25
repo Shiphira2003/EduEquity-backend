@@ -2,6 +2,7 @@ import { db } from "../db/db";
 import {
     applicationsTable,
     studentsTable,
+    usersTable,
     needAssessmentTable,
     disbursementsTable,
 } from "../db/schema";
@@ -43,7 +44,7 @@ export interface NeedScoreCalculation {
 export interface ApplicationRanking {
   applicationId: number;
   studentId: number;
-  studentName: string;
+  studentName: string | null;
   needScore: number;
   taadaFlag: string;
   rank: number;
@@ -269,13 +270,14 @@ export const getRankedApplications = async (
     let query = db.select({
       applicationId: applicationsTable.id,
       studentId: applicationsTable.studentId,
-      fullName: studentsTable.fullName,
+      fullName: usersTable.fullName,
       needScore: applicationsTable.needScore,
       taadaFlag: applicationsTable.taadaFlag,
       amountRequested: applicationsTable.amountRequested,
     })
     .from(applicationsTable)
     .innerJoin(studentsTable, eq(applicationsTable.studentId, studentsTable.id))
+    .innerJoin(usersTable, eq(studentsTable.userId, usersTable.id))
     .$dynamic();
 
     if (bursaryType) {

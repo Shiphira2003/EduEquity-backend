@@ -59,23 +59,18 @@ router.post("/register/student", async (req: Request, res: Response) => {
         const userCount = countResult[0].value;
         const roleName = userCount === 0 ? "SUPER_ADMIN" : "STUDENT";
 
-        // 3. Get role ID
-        const roleRes = await db.select({ id: rolesTable.id }).from(rolesTable).where(eq(rolesTable.name, roleName));
-        if (roleRes.length === 0) {
-            return res.status(500).json({ error: `System error: Role ${roleName} not found in database.` });
-        }
-        const roleId = roleRes[0].id;
-
         const hashedPassword = await bcrypt.hash(password, 10);
 
         // 4. Create user
         const userResult = await db.insert(usersTable).values({
             email,
             passwordHash: hashedPassword,
-            roleId,
+            role: roleName,
+            fullName: full_name,
+            nationalId: national_id,
             isActive: true,
             isVerified: true
-        }).returning({ id: usersTable.id, email: usersTable.email, roleId: usersTable.roleId });
+        } as any).returning({ id: usersTable.id, email: usersTable.email, role: usersTable.role });
 
         const user = userResult[0];
 
@@ -103,8 +98,7 @@ router.post("/register/student", async (req: Request, res: Response) => {
             // Notify all admins of the new registration
             const admins = await db.select({ id: usersTable.id })
                 .from(usersTable)
-                .leftJoin(rolesTable, eq(usersTable.roleId, rolesTable.id))
-                .where(eq(rolesTable.name, "ADMIN"));
+                .where(eq(usersTable.role, "ADMIN"));
 
             if (admins.length > 0) {
                 const notifications = admins.map(a => ({

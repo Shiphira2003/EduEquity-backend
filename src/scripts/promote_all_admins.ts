@@ -6,20 +6,10 @@ async function promoteAllAdmins() {
     try {
         console.log("Searching for existing ADMINS to promote to SUPER_ADMIN...");
 
-        // 1. Get roles
-        const allRoles = await db.select().from(rolesTable);
-        const adminRole = allRoles.find((r: any) => r.name === 'ADMIN');
-        const superAdminRole = allRoles.find((r: any) => r.name === 'SUPER_ADMIN');
-
-        if (!adminRole || !superAdminRole) {
-            console.error("ADMIN or SUPER_ADMIN role missing. Did you run migrations?");
-            process.exit(1);
-        }
-
         // 2. Find and update
         const result = await db.update(usersTable)
-            .set({ roleId: superAdminRole.id })
-            .where(eq(usersTable.roleId, adminRole.id))
+            .set({ role: "SUPER_ADMIN" } as any)
+            .where(eq(usersTable.role, "ADMIN"))
             .returning();
 
         if (result.length === 0) {

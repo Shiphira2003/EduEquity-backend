@@ -16,6 +16,8 @@ import {
     verifyDisbursementBudget,
     generateCashFlowReport,
 } from "../services/cashflow.service";
+import { notifySuperAdmins } from "../services/notification.service";
+
 
 const router = Router();
 
@@ -128,6 +130,11 @@ router.post("/initialize", async (req: AuthRequest, res: Response, next: NextFun
         await initializeFundSources(cycleYearNum);
 
         const newBalances = await getFundSourceBalances(cycleYearNum);
+
+        // Notify Super Admin
+        const adminEmail = (req.user as any)?.email || 'An Admin';
+        notifySuperAdmins(`${adminEmail} initialized the ${cycle_year} fund cycle.`);
+
         successResponse(res, `Fund cycle ${cycle_year} initialized successfully`, newBalances, HTTP_STATUS.CREATED);
     } catch (err) {
         next(err);
@@ -212,8 +219,9 @@ router.get("/config/:cycleYear", async (req: Request, res: Response, next: NextF
 router.put(
     "/config/:fundSourceId",
     validateFundSource,
-    async (req: Request, res: Response, next: NextFunction) => {
+    async (req: AuthRequest, res: Response, next: NextFunction) => {
         try {
+
             const { fundSourceId } = req.params;
             const { budget_per_cycle, description, is_open, start_date, end_date } = req.body;
 
@@ -232,6 +240,10 @@ router.put(
             if (result.length === 0) {
                 return errorResponse(res, "Fund source not found", HTTP_STATUS.NOT_FOUND);
             }
+
+            // Notify Super Admin
+            const adminEmail = (req.user as any)?.email || 'An Admin';
+            notifySuperAdmins(`${adminEmail} updated the fund source configuration for ${result[0].name} (Cycle: ${result[0].cycleYear}).`);
 
             successResponse(res, "Fund source updated", result[0]);
         } catch (err) {

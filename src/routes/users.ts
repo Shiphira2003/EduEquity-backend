@@ -38,42 +38,32 @@ router.post(
 
             const hashedPassword = await bcrypt.hash(password, 10);
 
-            // Get admin role id
-            const roleRes = await db.select({ id: rolesTable.id }).from(rolesTable).where(eq(rolesTable.name, "ADMIN"));
-
-            if (roleRes.length === 0) {
-                return res.status(500).json({
-                    success: false,
-                    message: "Admin role not found",
-                });
-            }
-
-            const adminRoleId = roleRes[0].id;
-
             // Transaction to ensure both user and admin profile are created
             const result = await db.transaction(async (tx) => {
-                // 1. Create User
+                // 1. Create User with unified identity
                 const userInsert = await tx.insert(usersTable).values({
                     email,
                     passwordHash: hashedPassword,
-                    roleId: adminRoleId,
+                    role: "ADMIN",
+                    fullName: full_name,
                     isActive: true,
-                    isVerified: true // Admins are pre-verified by Super Admin
-                }).returning();
+                    isVerified: true
+                } as any).returning();
 
                 const newUser = userInsert[0];
 
-                // 2. Generate System ID (ADMIN-X)
+                // 2. Generate System ID (ADMIN-X) based on new role structure
                 const adminCountRes = await tx.select({ val: count() })
-                    .from(adminsTable)
-                    .innerJoin(usersTable, eq(adminsTable.userId, usersTable.id))
-                    .innerJoin(rolesTable, eq(usersTable.roleId, rolesTable.id))
-                    .where(eq(rolesTable.name, "ADMIN"));
+                    .from(usersTable)
+                    .where(eq(usersTable.role, "ADMIN"));
                 
-                const nextId = (Number(adminCountRes[0].val) || 0) + 1;
+                const nextId = (Number(adminCountRes[0].val) || 0); // User is already inserted
                 const systemId = `ADMIN-${nextId}`;
 
-                // 3. Create Admin Profile
+                // 3. Update User with systemId (optional, but keep in adminsTable for backup)
+                await tx.update(usersTable).set({ systemId } as any).where(eq(usersTable.id, newUser.id));
+
+                // 4. Create Admin Profile
                 await tx.insert(adminsTable).values({
                     userId: newUser.id,
                     fullName: full_name,
@@ -83,7 +73,7 @@ router.post(
                 return { ...newUser, systemId };
             });
 
-            // 4. Send Welcome Email
+            // 5. Send Welcome Email
             sendAdminWelcomeEmail(email, full_name, result.systemId, password);
 
             res.status(201).json({
@@ -98,19 +88,101 @@ router.post(
     }
 );
 
+// -------------------- GET all admins (Super Admin only) --------------------
+router.get(
+    "/admins",
+    authMiddleware,
+    roleMiddleware("SUPER_ADMIN"),
+    async (req: Request, res: Response) => {
+        try {
+            const admins = await db.select({
+                id: usersTable.id,
+                email: usersTable.email,
+                fullName: usersTable.fullName,
+                systemId: usersTable.systemId,
+                isActive: usersTable.isActive,
+                createdAt: usersTable.createdAt
+            })
+            .from(usersTable)
+            .where(eq(usersTable.role, "ADMIN"));
+
+            res.json({
+                success: true,
+                data: admins
+            });
+        } catch (err) {
+            console.error(err);
+            res.status(500).json({ success: false, message: "Server error" });
+        }
+    }
+);
+
+// -------------------- PATCH toggle admin status --------------------
+router.patch(
+    "/admin/:id/toggle",
+    authMiddleware,
+    roleMiddleware("SUPER_ADMIN"),
+    async (req: Request, res: Response) => {
+        try {
+            const { id } = req.params;
+            const idParam = Array.isArray(id) ? id[0] : id;
+            
+            const user = await db.select().from(usersTable).where(eq(usersTable.id, parseInt(idParam as string, 10)));
+            if (user.length === 0) {
+                return res.status(404).json({ success: false, message: "User not found" });
+            }
+
+            const updated = await db.update(usersTable)
+                .set({ isActive: !user[0].isActive })
+                .where(eq(usersTable.id, parseInt(Array.isArray(id) ? id[0] : id as string, 10)))
+                .returning();
+
+            res.json({
+                success: true,
+                message: `Admin ${updated[0].isActive ? 'activated' : 'deactivated'} successfully`,
+                data: updated[0]
+            });
+        } catch (err) {
+            console.error(err);
+            res.status(500).json({ success: false, message: "Server error" });
+        }
+    }
+);
+
+// -------------------- DELETE admin --------------------
+router.delete(
+    "/admin/:id",
+    authMiddleware,
+    roleMiddleware("SUPER_ADMIN"),
+    async (req: Request, res: Response) => {
+        try {
+            const { id } = req.params;
+            
+            await db.delete(usersTable).where(eq(usersTable.id, parseInt(Array.isArray(id) ? id[0] : id as string, 10)));
+
+            res.json({
+                success: true,
+                message: "Admin removed successfully"
+            });
+        } catch (err) {
+            console.error(err);
+            res.status(500).json({ success: false, message: "Server error" });
+        }
+    }
+);
+
 // -------------------- GET all users --------------------
 router.get("/", async (req: Request, res: Response) => {
     try {
         const result = await db.select({
             id: usersTable.id,
             email: usersTable.email,
-            role_id: usersTable.roleId,
+            role: usersTable.role,
+            fullName: usersTable.fullName,
             is_active: usersTable.isActive,
-            created_at: usersTable.createdAt,
-            role_name: rolesTable.name
+            created_at: usersTable.createdAt
         })
-        .from(usersTable)
-        .leftJoin(rolesTable, eq(usersTable.roleId, rolesTable.id));
+        .from(usersTable);
         res.json(result);
     } catch (err) {
         console.error(err);
@@ -125,13 +197,12 @@ router.get("/:id", async (req: Request, res: Response) => {
         const result = await db.select({
             id: usersTable.id,
             email: usersTable.email,
-            role_id: usersTable.roleId,
+            role: usersTable.role,
+            fullName: usersTable.fullName,
             is_active: usersTable.isActive,
-            created_at: usersTable.createdAt,
-            role_name: rolesTable.name
+            created_at: usersTable.createdAt
         })
         .from(usersTable)
-        .leftJoin(rolesTable, eq(usersTable.roleId, rolesTable.id))
         .where(eq(usersTable.id, parseInt(id, 10)));
 
         if (result.length === 0) {
@@ -148,20 +219,20 @@ router.get("/:id", async (req: Request, res: Response) => {
 // -------------------- POST create a new user --------------------
 router.post("/", async (req: Request, res: Response) => {
     try {
-        const { email, password_hash, role_id, is_active } = req.body;
+        const { email, password, role, is_active, full_name } = req.body;
 
-        // Hash the password
-        const hashedPassword = await bcrypt.hash(password_hash, 10); // 10 salt rounds
+        const hashedPassword = await bcrypt.hash(password, 10);
 
         const result = await db.insert(usersTable).values({
             email,
             passwordHash: hashedPassword,
-            roleId: role_id || null,
+            role: role || "STUDENT",
+            fullName: full_name,
             isActive: is_active ?? true
-        }).returning({
+        } as any).returning({
             id: usersTable.id,
             email: usersTable.email,
-            role_id: usersTable.roleId,
+            role: usersTable.role,
             is_active: usersTable.isActive,
             created_at: usersTable.createdAt
         });
@@ -180,15 +251,15 @@ router.post("/", async (req: Request, res: Response) => {
 router.put("/:id", async (req: Request, res: Response) => {
     try {
         const id = req.params.id as string;
-        const { email, password_hash, role_id, is_active } = req.body;
+        const { email, password, role, is_active, full_name } = req.body;
 
-        // Hash password if provided
-        const hashedPassword = password_hash ? await bcrypt.hash(password_hash, 10) : null;
+        const hashedPassword = password ? await bcrypt.hash(password, 10) : null;
 
         const updateData: any = {};
         if (email !== undefined) updateData.email = email;
         if (hashedPassword) updateData.passwordHash = hashedPassword;
-        if (role_id !== undefined) updateData.roleId = role_id;
+        if (role !== undefined) updateData.role = role;
+        if (full_name !== undefined) updateData.fullName = full_name;
         if (is_active !== undefined) updateData.isActive = is_active;
 
         const result = await db.update(usersTable)
@@ -197,7 +268,7 @@ router.put("/:id", async (req: Request, res: Response) => {
             .returning({
                 id: usersTable.id,
                 email: usersTable.email,
-                role_id: usersTable.roleId,
+                role: usersTable.role,
                 is_active: usersTable.isActive,
                 created_at: usersTable.createdAt
             });

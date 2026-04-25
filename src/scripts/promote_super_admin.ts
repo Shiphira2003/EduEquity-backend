@@ -15,21 +15,9 @@ async function promoteUser(email: string) {
     try {
         console.log(`Promoting ${email} to SUPER_ADMIN...`);
 
-        // 1. Get SUPER_ADMIN role ID
-        const roleRes = await db.select({ id: rolesTable.id })
-            .from(rolesTable)
-            .where(eq(rolesTable.name, "SUPER_ADMIN"));
-
-        if (roleRes.length === 0) {
-            console.error("SUPER_ADMIN role not found in database. Did you run the migration?");
-            process.exit(1);
-        }
-
-        const roleId = roleRes[0].id;
-
         // 2. Update user
         const result = await db.update(usersTable)
-            .set({ roleId })
+            .set({ role: "SUPER_ADMIN" } as any)
             .where(eq(usersTable.email, email))
             .returning();
 

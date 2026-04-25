@@ -7,14 +7,17 @@ async function seedAdmin() {
     try {
         const hashedPassword = await bcrypt.hash('password123', 10);
         
-        // 1. Get role ID for SUPER_ADMIN
-        const roleRes = await db.select({ id: rolesTable.id }).from(rolesTable).where(eq(rolesTable.name, 'SUPER_ADMIN'));
-        if (roleRes.length === 0) {
-            console.log('SUPER_ADMIN role not found. Creating it...');
-            const newRole = await db.insert(rolesTable).values({ name: 'SUPER_ADMIN' }).returning({ id: rolesTable.id });
-            roleRes.push(newRole[0]);
+        const rolesToSeed = ['SUPER_ADMIN', 'ADMIN', 'STUDENT'];
+        for (const roleName of rolesToSeed) {
+            const res = await db.select({ id: rolesTable.id }).from(rolesTable).where(eq(rolesTable.name, roleName));
+            if (res.length === 0) {
+                console.log(`${roleName} role not found. Creating it...`);
+                await db.insert(rolesTable).values({ name: roleName });
+            }
         }
         
+        // 1. Get role ID for SUPER_ADMIN
+        const roleRes = await db.select({ id: rolesTable.id }).from(rolesTable).where(eq(rolesTable.name, 'SUPER_ADMIN'));
         const roleId = roleRes[0].id;
         
         // 2. Insert admin@bursarhub.com

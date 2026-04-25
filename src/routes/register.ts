@@ -26,22 +26,14 @@ router.post("/", roleMiddleware("admin"), registerLimiter, async (req: Request, 
 
         const hashedPassword = await bcrypt.hash(password, 10);
 
-        const roleResult = await db.select({ id: rolesTable.id }).from(rolesTable).where(eq(rolesTable.name, role.toUpperCase()));
-        if (roleResult.length === 0) {
-            return res.status(400).json({ error: `Role ${role.toUpperCase()} not found` });
-        }
-        const roleId = roleResult[0].id;
-
         const userResult = await db.insert(usersTable).values({
             email,
             passwordHash: hashedPassword,
-            roleId,
+            role: role.toUpperCase(),
+            fullName: full_name,
+            nationalId: national_id,
             isActive: true
-        }).returning({
-            id: usersTable.id,
-            email: usersTable.email,
-            roleId: usersTable.roleId
-        });
+        } as any).returning();
 
         const user = userResult[0];
 
@@ -56,8 +48,8 @@ router.post("/", roleMiddleware("admin"), registerLimiter, async (req: Request, 
 
             const studentResult = await db.insert(studentsTable).values({
                 userId: user.id,
-                fullName: full_name,
-                nationalId: national_id,
+                fullName: full_name, // Keeping for compatibility until schema cleanup
+                nationalId: national_id, 
                 institution,
                 educationLevel: education_level,
                 course: course || null,
