@@ -8,6 +8,7 @@
     "db:migrate": "ts-node-dev scripts/init-db.ts",
     "db:migrate:run": "ts-node-dev scripts/migrate-all.ts",
     "db:setup": "npm run db:migrate && npm run db:migrate:run",
+    "webhook:setup": "node scripts/setup-webhook.js",
     "test": "vitest run"
   },
   "keywords": [],

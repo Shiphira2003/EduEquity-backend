@@ -37,6 +37,7 @@ export const disbursementStatusEnum = pgEnum("disbursementStatus", [
   "PENDING",
   "APPROVED",
   "PROCESSED",
+  "PAID",
 ]);
 
 // ============================================
@@ -309,6 +310,21 @@ export const announcementsTable = pgTable(
     createdBy: integer("created_by").references(() => usersTable.id, { onDelete: "set null" }),
     createdAt: timestamp("created_at").defaultNow(),
   }
+);
+
+// New: Institutions Table
+export const institutionsTable = pgTable(
+  "institutions",
+  {
+    id: serial("id").primaryKey(),
+    name: varchar("name", { length: 255 }).notNull().unique(),
+    code: varchar("code", { length: 50 }),
+    category: varchar("category", { length: 50 }), // TVET, University, etc.
+    createdAt: timestamp("created_at").defaultNow(),
+  },
+  (table) => ({
+    nameIdx: uniqueIndex("institutions_name_idx").on(table.name),
+  })
 );
 
 // 12. Admins Table (admin profile details)

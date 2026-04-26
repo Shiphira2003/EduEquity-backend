@@ -263,18 +263,18 @@ router.get(
             // Get student's applications with latest disbursement status via lateral-style sub-select
             const rows = await db.select({
                 id: applicationsTable.id,
-                cycleYear: applicationsTable.cycleYear,
-                amountRequested: applicationsTable.amountRequested,
-                amountAllocated: applicationsTable.amountAllocated,
+                cycle_year: applicationsTable.cycleYear,
+                amount_requested: applicationsTable.amountRequested,
+                amount_allocated: applicationsTable.amountAllocated,
                 status: applicationsTable.status,
-                taadaFlag: applicationsTable.taadaFlag,
-                createdAt: applicationsTable.createdAt,
-                rejectionReason: applicationsTable.rejectionReason,
-                bursaryType: applicationsTable.bursaryType,
+                taada_flag: applicationsTable.taadaFlag,
+                created_at: applicationsTable.createdAt,
+                rejection_reason: applicationsTable.rejectionReason,
+                bursary_type: applicationsTable.bursaryType,
                 county: applicationsTable.county,
                 constituency: applicationsTable.constituency,
-                feeBalance: applicationsTable.feeBalance,
-                documentUrl: applicationsTable.documentUrl,
+                fee_balance: applicationsTable.feeBalance,
+                document_url: applicationsTable.documentUrl,
             })
             .from(applicationsTable)
             .innerJoin(studentsTable, eq(applicationsTable.studentId, studentsTable.id))
@@ -565,17 +565,24 @@ router.post(
     roleMiddleware("admin"),
     async (req: AuthRequest, res: Response, next: NextFunction) => {
         try {
-            const { cycle_year } = req.body;
-            const admin_id = req.user!.userId;
+            const { cycle_year, flatAmount } = req.body;
+            const admin_id = (req as any).user.userId;
 
             if (!cycle_year) {
-                return res.status(400).json({ success: false, message: "cycle_year is required" });
+                return res.status(400).json({ success: false, message: "Cycle year is required" });
             }
 
-            // 1. Get all pending applications for the cycle
-            const pendingQuery = await db.select({ id: applicationsTable.id })
+            // 1. Get all pending applications for this cycle
+            const pendingQuery = await db.select()
                 .from(applicationsTable)
-                .where(and(eq(applicationsTable.cycleYear, parseInt(cycle_year)), eq(applicationsTable.status, "PENDING")));
+                .where(and(
+                    eq(applicationsTable.cycleYear, cycle_year),
+                    eq(applicationsTable.status, 'PENDING')
+                ));
+
+            if (pendingQuery.length === 0) {
+                return res.status(200).json({ success: true, message: "No pending applications found for this cycle", totalEvaluated: 0, approved: 0, rejected: 0, stillPending: 0 });
+            }
 
             // 2. Ensure their need scores are up to date
             for (const row of pendingQuery) {
@@ -596,7 +603,8 @@ router.post(
 
                 if (app.needScore >= 70) {
                     newStatus = 'APPROVED';
-                    allocation = app.recommendedAllocation;
+                    // EQUITY: If flatAmount is provided, use it. Otherwise use recommended.
+                    allocation = flatAmount ? parseFloat(flatAmount) : app.recommendedAllocation;
                 } else if (app.needScore <= 40) {
                     newStatus = 'REJECTED';
                     reason = 'Automatically rejected: Did not meet the minimum need threshold.';
@@ -622,6 +630,22 @@ router.post(
                     oldValue: JSON.stringify({ status: 'PENDING', amount_allocated: 0 }),
                     newValue: JSON.stringify({ status: newStatus, amount_allocated: allocation })
                 });
+
+                // Record ALLOCATION in cash flow if approved
+                if (newStatus === "APPROVED") {
+                    try {
+                        await recordCashFlow(
+                            app.bursaryType,
+                            "ALLOCATION",
+                            allocation,
+                            `AUTO-APP-${app.applicationId}`,
+                            `Automated approval for ${cycle_year} cycle`,
+                            undefined
+                        );
+                    } catch (cfErr) {
+                        console.error("Failed to record automated allocation cash flow:", cfErr);
+                    }
+                }
 
                 // Send email
                 try {

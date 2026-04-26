@@ -217,7 +217,6 @@ export const validateNeedAssessment = (
     dependents,
     orphaned,
     disabled,
-    academic_score,
   } = req.body;
 
   if (family_income !== undefined && !isValidAmount(family_income)) {
@@ -239,9 +238,6 @@ export const validateNeedAssessment = (
     errors.disabled = "Disabled must be a boolean";
   }
 
-  if (academic_score !== undefined && !isValidPercentage(academic_score)) {
-    errors.academic_score = "Academic score must be between 0 and 100";
-  }
 
   if (Object.keys(errors).length > 0) {
     return res.status(400).json({
@@ -384,25 +380,32 @@ export const validateFundSource = (
   next: NextFunction
 ) => {
   const errors: Record<string, string> = {};
+  const isUpdate = req.method === "PUT" || req.method === "PATCH";
   const { name, budget_per_cycle, cycle_year } = req.body;
 
-  const validNames = ["MCA", "CDF", "COUNTY", "NATIONAL"];
-  if (!isNotEmpty(name)) {
-    errors.name = "Fund source name is required";
-  } else if (!validNames.includes(name)) {
-    errors.name = `Fund source must be one of: ${validNames.join(", ")}`;
+  if (!isUpdate || name !== undefined) {
+    const validNames = ["MCA", "CDF", "COUNTY", "NATIONAL"];
+    if (!isNotEmpty(name)) {
+      errors.name = "Fund source name is required";
+    } else if (!validNames.includes(name)) {
+      errors.name = `Fund source must be one of: ${validNames.join(", ")}`;
+    }
   }
 
-  if (!isNotEmpty(budget_per_cycle)) {
-    errors.budget_per_cycle = "Budget per cycle is required";
-  } else if (!isValidAmount(budget_per_cycle)) {
-    errors.budget_per_cycle = "Budget must be a positive decimal";
+  if (!isUpdate || budget_per_cycle !== undefined) {
+    if (!isNotEmpty(budget_per_cycle)) {
+      errors.budget_per_cycle = "Budget per cycle is required";
+    } else if (!isValidAmount(budget_per_cycle)) {
+      errors.budget_per_cycle = "Budget must be a positive decimal";
+    }
   }
 
-  if (!isNotEmpty(cycle_year)) {
-    errors.cycle_year = "Cycle year is required";
-  } else if (!isValidCycleYear(cycle_year)) {
-    errors.cycle_year = "Cycle year must be current year or future";
+  if (!isUpdate || cycle_year !== undefined) {
+    if (!isNotEmpty(cycle_year)) {
+      errors.cycle_year = "Cycle year is required";
+    } else if (!isValidCycleYear(cycle_year)) {
+      errors.cycle_year = "Cycle year must be current year or future";
+    }
   }
 
   if (Object.keys(errors).length > 0) {

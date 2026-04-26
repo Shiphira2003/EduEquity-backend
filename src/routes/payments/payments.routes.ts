@@ -6,7 +6,9 @@ import {
   getPaymentById,
   updatePayment,
   createCheckoutSession,
-  getPaymentsByUserId
+  getPaymentsByUserId,
+  createBulkCheckoutSession,
+  verifyPaymentSession
 } from "./payments.controller";
 import { webhookHandler } from "./payments.webhook";
 import express from "express";
@@ -20,6 +22,8 @@ paymentRouter.get("/:id", getPaymentById);
 paymentRouter.put("/:id", updatePayment);
 paymentRouter.delete("/:id", deletePayment);
 paymentRouter.post("/checkout-session", createCheckoutSession);
+paymentRouter.post("/bulk-checkout-session", createBulkCheckoutSession);
+paymentRouter.get("/verify/:sessionId", verifyPaymentSession);
 
 // Webhook needs raw body parsing
 paymentRouter.post("/webhook", express.raw({ type: "application/json" }), webhookHandler);

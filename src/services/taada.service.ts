@@ -37,7 +37,6 @@ export interface NeedScoreCalculation {
     dependentsFactor: number;
     orphanedBonus: number;
     disabledBonus: number;
-    academicFactor: number;
   };
 }
 
@@ -48,7 +47,8 @@ export interface ApplicationRanking {
   needScore: number;
   taadaFlag: string;
   rank: number;
-  recommendedAllocation: number; // Suggested amount based on ranking
+  recommendedAllocation: number;
+  bursaryType: string;
 }
 
 /**
@@ -126,24 +126,21 @@ export const calculateTaadaFlag = async (
 /**
  * Calculate Need Score based on socioeconomic factors
  * Scoring breakdown:
- * - Family Income (40%): Lower income = higher score
- * - Dependents (20%): More dependents = higher score
- * - Special Status (15%): Orphaned/Disabled = bonus points
- * - Academic Performance (15%): Better grades = slight bonus
- * - TAADA Tier (10%): FIRST_TIME gets 30-point bonus
+ * - Family Income (50%): Lower income = higher score
+ * - Dependents (25%): More dependents = higher score
+ * - Special Status (25%): Orphaned/Disabled = bonus points
+ * - TAADA Tier (10-30 points): FIRST_TIME gets bonus points
  */
 export const calculateNeedScore = async (
   applicationId: number,
   taadaFlag: string
 ): Promise<NeedScoreCalculation> => {
   try {
-    // Get need assessment data
     const assessment = await db.select({
       familyIncome: needAssessmentTable.familyIncome,
       dependents: needAssessmentTable.dependents,
       orphaned: needAssessmentTable.orphaned,
       disabled: needAssessmentTable.disabled,
-      academicScore: needAssessmentTable.academicScore,
     })
     .from(needAssessmentTable)
     .where(eq(needAssessmentTable.applicationId, applicationId));
@@ -159,7 +156,6 @@ export const calculateNeedScore = async (
           dependentsFactor: 0,
           orphanedBonus: 0,
           disabledBonus: 0,
-          academicFactor: 0,
         },
       };
     }
@@ -202,24 +198,12 @@ export const calculateNeedScore = async (
 
     specialStatusScore = Math.min(orphanedBonus + disabledBonus, 100);
 
-    // 4. Academic Performance (15% weight - inverse)
-    // Higher grades = slight bonus (helps tie-breaking)
-    let academicFactor = 50; // Neutral
-    if (data.academicScore) {
-      const score = parseFloat(data.academicScore);
-      // Scale: 0-40 = 30, 40-60 = 50, 60-80 = 70, 80-100 = 90
-      if (score < 40) academicFactor = 30;
-      else if (score < 60) academicFactor = 50;
-      else if (score < 80) academicFactor = 70;
-      else academicFactor = 90;
-    }
 
     // Calculate weighted base score (0-100)
     const baseScore =
-      familyIncomeFactor * 0.4 +
-      dependentsFactor * 0.2 +
-      specialStatusScore * 0.15 +
-      academicFactor * 0.15;
+      familyIncomeFactor * 0.5 +
+      dependentsFactor * 0.25 +
+      specialStatusScore * 0.25;
 
     // Add TAADA tier bonus
     const taadaBonusScore = taadaFlag === "FIRST_TIME" ? 30 : taadaFlag === "REJECTED_BEFORE" ? 10 : 0;
@@ -236,7 +220,6 @@ export const calculateNeedScore = async (
         dependentsFactor: Math.round(dependentsFactor),
         orphanedBonus,
         disabledBonus,
-        academicFactor: Math.round(academicFactor),
       },
     };
   } catch (error) {
@@ -250,7 +233,6 @@ export const calculateNeedScore = async (
         dependentsFactor: 0,
         orphanedBonus: 0,
         disabledBonus: 0,
-        academicFactor: 0,
       },
     };
   }
@@ -274,6 +256,7 @@ export const getRankedApplications = async (
       needScore: applicationsTable.needScore,
       taadaFlag: applicationsTable.taadaFlag,
       amountRequested: applicationsTable.amountRequested,
+      bursaryType: applicationsTable.bursaryType,
     })
     .from(applicationsTable)
     .innerJoin(studentsTable, eq(applicationsTable.studentId, studentsTable.id))
@@ -310,6 +293,7 @@ export const getRankedApplications = async (
         parseFloat(row.amountRequested),
         parseFloat(row.needScore ?? "0")
       ),
+      bursaryType: row.bursaryType ?? "NATIONAL",
     }));
 
     return rankings;

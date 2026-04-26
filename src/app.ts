@@ -16,6 +16,8 @@ import fundsourcesRouter from "./routes/fundsources";
 import rankingRouter from "./routes/ranking";
 import publicRouter from "./routes/public";
 import communityRouter from "./routes/community";
+import institutionsRouter from "./routes/institutions";
+import coursesRouter from "./routes/courses";
 import { paymentRouter } from "./routes/payments/payments.routes";
 
 const app = express();
@@ -32,7 +34,7 @@ app.use('/api/payments/webhook', express.raw({ type: 'application/json' }));
 
 // ✅ CORS configuration
 app.use(cors({
-    origin: ["http://localhost:5173", "http://localhost:5174"],
+    origin: ["http://localhost:5173", "http://localhost:5174", "http://localhost:5175", "http://localhost:3000", "http://127.0.0.1:5173"],
     credentials: true,
 }));
 
@@ -69,6 +71,8 @@ app.use("/api/fund-sources", fundsourcesRouter);
 app.use("/api/ranking", rankingRouter);
 app.use("/api/public", publicRouter);
 app.use("/api/community", communityRouter);
+app.use("/api/institutions", institutionsRouter);
+app.use("/api/courses", coursesRouter);
 app.use("/api/payments", paymentRouter);
 
 app.get("/", (req, res) => {

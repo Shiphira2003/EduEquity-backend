@@ -1,7 +1,7 @@
 import { Router, Request, Response, NextFunction } from "express";
 import { db } from "../db/db";
 import { disbursementsTable, applicationsTable, studentsTable } from "../db/schema";
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, inArray } from "drizzle-orm";
 
 const router = Router();
 
@@ -14,22 +14,23 @@ router.get(
     "/ledger",
     async (req: Request, res: Response, next: NextFunction) => {
         try {
+            console.log('🔍 Fetching public ledger records...');
             const result = await db.select({
                 id: disbursementsTable.id,
                 amount: disbursementsTable.amount,
                 fund_source: disbursementsTable.fundSource,
                 disbursed_at: disbursementsTable.disbursedAt,
                 status: disbursementsTable.status,
-                institution: studentsTable.institution,
+                institution: applicationsTable.institution,
                 cycle_year: applicationsTable.cycleYear,
             })
             .from(disbursementsTable)
-            .innerJoin(applicationsTable, eq(disbursementsTable.allocationId, applicationsTable.id))
-            .innerJoin(studentsTable, eq(applicationsTable.studentId, studentsTable.id))
-            .where(eq(disbursementsTable.status, "PROCESSED"))
-            .orderBy(desc(disbursementsTable.disbursedAt))
-            .limit(100);
+            .leftJoin(applicationsTable, eq(disbursementsTable.allocationId, applicationsTable.id))
+            .where(inArray(disbursementsTable.status, ["PROCESSED", "PAID"]))
+            .orderBy(desc(disbursementsTable.disbursedAt));
 
+            console.log(`✅ Found ${result.length} processed disbursements for public ledger`);
+            
             res.json({
                 success: true,
                 data: result,

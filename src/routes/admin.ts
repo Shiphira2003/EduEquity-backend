@@ -400,6 +400,66 @@ router.delete("/applications/:id", async (req: Request, res: Response, next: Nex
 // CRUD: Disbursements
 // ─────────────────────────────────────────────
 
+// POST /api/admin/bulk-disbursements
+// Generates PENDING disbursement records for all APPROVED applications that don't have one.
+router.post("/bulk-disbursements", async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+        console.log(`🔨 [Bulk Disbursement] Triggered by ${req.user?.email} (Role: ${req.user?.role})`);
+        
+        // 1. Get all approved applications
+        const approvedApps = await db.select({
+            id: applicationsTable.id,
+            amountAllocated: applicationsTable.amountAllocated,
+            bursaryType: applicationsTable.bursaryType
+        })
+        .from(applicationsTable)
+        .where(eq(applicationsTable.status, "APPROVED"));
+
+        console.log(`🔍 Found ${approvedApps.length} APPROVED applications.`);
+
+        // 2. Get existing disbursement allocation IDs to avoid duplicates
+        const existingDisbs = await db.select({ allocationId: disbursementsTable.allocationId }).from(disbursementsTable);
+        const existingIds = new Set(existingDisbs.map(d => d.allocationId));
+
+        // 3. Filter applications that need a disbursement
+        const appsToDisburse = approvedApps.filter(app => !existingIds.has(app.id));
+        console.log(`⚖️  ${appsToDisburse.length} applications need new disbursement records.`);
+
+        if (appsToDisburse.length === 0) {
+            return res.json({ 
+                success: true, 
+                message: "No new approved applications found needing disbursement.", 
+                created_count: 0 
+            });
+        }
+
+        // 4. Batch create disbursements
+        const newDisbursements = appsToDisburse.map(app => ({
+            allocationId: app.id,
+            amount: app.amountAllocated || "0",
+            status: "PENDING" as any,
+            fundSource: (app.bursaryType || "NATIONAL") as any,
+        }));
+
+        const result = await db.insert(disbursementsTable).values(newDisbursements).returning();
+        console.log(`✅ Successfully generated ${result.length} disbursement records.`);
+
+        // Notify Super Admin
+        const adminEmail = req.user?.email || 'An Admin';
+        notifySuperAdmins(`${adminEmail} bulk-generated ${result.length} new disbursement records.`);
+
+        res.json({
+            success: true,
+            message: `Successfully generated ${result.length} disbursement records.`,
+            created_count: result.length,
+            records: result
+        });
+    } catch (err: any) {
+        console.error("❌ Bulk Disbursement Error:", err.message, err.stack);
+        next(err);
+    }
+});
+
 // POST /api/admin/disbursements
 router.post("/disbursements", async (req: Request, res: Response, next: NextFunction) => {
     try {

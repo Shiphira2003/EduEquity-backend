@@ -16,7 +16,7 @@ import {
     verifyDisbursementBudget,
     generateCashFlowReport,
 } from "../services/cashflow.service";
-import { notifySuperAdmins } from "../services/notification.service";
+import { notifySuperAdmins, broadcastNotification } from "../services/notification.service";
 
 
 const router = Router();
@@ -229,8 +229,19 @@ router.put(
             if (budget_per_cycle !== undefined) updateData.budgetPerCycle = budget_per_cycle.toString();
             if (description !== undefined) updateData.description = description;
             if (is_open !== undefined) updateData.isOpen = is_open;
-            if (start_date !== undefined) updateData.startDate = new Date(start_date);
-            if (end_date !== undefined) updateData.endDate = new Date(end_date);
+            
+            // Correctly handle date objects or null
+            if (start_date !== undefined) {
+                updateData.startDate = start_date ? new Date(start_date) : null;
+            }
+            if (end_date !== undefined) {
+                updateData.endDate = end_date ? new Date(end_date) : null;
+            }
+
+            const existingSource = await db.select({ isOpen: fundSourcesTable.isOpen })
+                .from(fundSourcesTable)
+                .where(eq(fundSourcesTable.id, parseInt(fundSourceId as string, 10)))
+                .limit(1);
 
             const result = await db.update(fundSourcesTable)
                 .set(updateData)
@@ -241,9 +252,19 @@ router.put(
                 return errorResponse(res, "Fund source not found", HTTP_STATUS.NOT_FOUND);
             }
 
-            // Notify Super Admin
+            // Notify Super Admin of configuration change
             const adminEmail = (req.user as any)?.email || 'An Admin';
             notifySuperAdmins(`${adminEmail} updated the fund source configuration for ${result[0].name} (Cycle: ${result[0].cycleYear}).`);
+
+            // If the cycle was just OPENED (transitioned from false to true), notify students and admins
+            const wasOpen = existingSource[0]?.isOpen;
+            if (is_open === true && wasOpen === false) {
+                broadcastNotification(
+                    `Good news! The ${result[0].name} bursary cycle for ${result[0].cycleYear} is now OPEN. Qualified students are encouraged to apply before the deadline.`,
+                    ["STUDENT", "ADMIN", "SUPER_ADMIN"],
+                    "BURSARY_OPENED"
+                );
+            }
 
             successResponse(res, "Fund source updated", result[0]);
         } catch (err) {

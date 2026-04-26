@@ -123,8 +123,15 @@ router.post("/register/student", async (req: Request, res: Response) => {
             message: roleName === "SUPER_ADMIN"
                 ? "Admin account created successfully (first user)"
                 : "Student registered successfully",
-            token,
-            user: { id: user.id, email: user.email, role: roleName },
+            accessToken: token, // Consistent with frontend expectations
+            user: { 
+                id: user.id, 
+                email: user.email, 
+                role: roleName,
+                fullName: full_name,
+                nationalId: national_id,
+                avatar: "" 
+            },
             student
         });
     } catch (err: any) {
@@ -159,7 +166,6 @@ router.get("/profile", async (req: Request, res: Response) => {
             dependents: studentsTable.dependents,
             orphaned: studentsTable.orphaned,
             disabled: studentsTable.disabled,
-            academicScore: studentsTable.academicScore,
             email: usersTable.email
         })
         .from(studentsTable)
@@ -197,7 +203,6 @@ router.put("/profile", async (req: Request, res: Response) => {
             dependents,
             orphaned,
             disabled,
-            academicScore
         } = req.body;
 
         const existing = await db.select({ id: studentsTable.id, isBankLocked: studentsTable.isBankLocked })
@@ -219,7 +224,6 @@ router.put("/profile", async (req: Request, res: Response) => {
             dependents,
             orphaned,
             disabled,
-            academicScore
         };
 
         // Bank details can only be updated if not locked

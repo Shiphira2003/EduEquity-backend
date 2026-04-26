@@ -1,12 +1,15 @@
 import Stripe from "stripe";
 import { Request, Response } from "express";
 import { db } from "../../db/db";
-import { paymentsTable, applicationsTable, notificationsTable } from "../../db/schema";
+import { applicationsTable, usersTable, studentsTable } from "../../db/schema";
 import { eq } from "drizzle-orm";
+import { reconcilePayment } from "../../services/payment.reconciliation";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "sk_test_mock", {
     apiVersion: "2025-02-24.acacia" as any,
 });
+
+console.log(`🔌 Payment Webhook initialized with ${process.env.STRIPE_SECRET_KEY ? 'live secret key' : 'MOCK KEY'}`);
 
 export const webhookHandler = async (req: Request, res: Response) => {
     const sig = req.headers["stripe-signature"];
@@ -23,59 +26,48 @@ export const webhookHandler = async (req: Request, res: Response) => {
 
     if (event.type === "checkout.session.completed") {
         const session = event.data.object as any;
-        const applicationId = session.metadata?.applicationId;
-        const userId = session.metadata?.userId;
+        const isBulk = session.metadata?.bulk_payment === 'true';
         const transactionId = session.payment_intent;
-        const amount = session.amount_total;
-
-        if (!applicationId || !userId || !transactionId || !amount) {
-            console.error("❌ Missing required metadata (applicationId, userId, transactionId, amount)");
-            res.status(400).json({ error: "Missing required metadata" }); 
-            return; 
-        }
-
-        let paymentStatus = "PENDING";
         const stripeStatus = session.payment_status;
-        if (stripeStatus === "paid") {
-            paymentStatus = "PROCESSED";
-        } else if (stripeStatus === "unpaid" || stripeStatus === "Failed") {
-            paymentStatus = "FAILED";
+
+        if (stripeStatus !== "paid") {
+            console.log(`Payment status is ${stripeStatus}, skipping reconciliation.`);
+            return res.status(200).json({ received: true });
         }
 
         try {
-            console.log(`💰 Saving stripe payment for application ${applicationId}`);
-            
-            // 1. Insert Payment Record
-            await db.insert(paymentsTable).values({
-                applicationId: Number(applicationId),
-                userId: Number(userId),
-                amount: (amount / 100).toString(),
-                paymentStatus,
-                transactionId,
-                paymentMethod: "Stripe",
-            } as any);
+            if (isBulk) {
+                const disbursementIds = (session.metadata?.disbursement_ids || "").split(",");
+                const applicationIds = (session.metadata?.application_ids || "").split(",");
+                const amounts = (session.metadata?.amounts || "").split(",");
 
-            // 2. Finalize Application state to COMPLETED
-            if (paymentStatus === "PROCESSED") {
-                await db.update(applicationsTable)
-                    .set({ status: 'COMPLETED' as any }) // Force cast for enum compatibility if needed
-                    .where(eq(applicationsTable.id, Number(applicationId)));
+                for (let i = 0; i < disbursementIds.length; i++) {
+                    const appId = Number(applicationIds[i]);
+                    const disbId = Number(disbursementIds[i]);
+                    const amount = amounts[i];
 
-                // 3. Dispatch Notification to the Student
-                await db.insert(notificationsTable).values({
-                    userId: Number(userId),
-                    message: `Congratulations! Your bursary payment of KES ${(amount / 100)} has successfully completed and processed to your account.`,
-                    type: "PAYMENT_COMPLETED",
-                    isRead: false
-                });
+                    // Lookup userId
+                    const appLookup = await db.select({ suid: usersTable.id })
+                        .from(applicationsTable)
+                        .innerJoin(studentsTable, eq(applicationsTable.studentId, studentsTable.id))
+                        .innerJoin(usersTable, eq(studentsTable.userId, usersTable.id))
+                        .where(eq(applicationsTable.id, appId));
 
-                console.log(`✅ Application ${applicationId} COMPLETED and user notified.`);
+                    if (appLookup.length > 0) {
+                        await reconcilePayment(appId, appLookup[0].suid, amount, transactionId, disbId);
+                    }
+                }
+            } else {
+                const appId = Number(session.metadata?.applicationId);
+                const userId = Number(session.metadata?.userId);
+                const disbId = Number(session.metadata?.disbursementId);
+                const amount = (session.amount_total / 100).toString();
+
+                await reconcilePayment(appId, userId, amount, transactionId, disbId || undefined);
             }
-
-        } catch (err) {
-            console.error("❌ Failed to process checkout webhook", err);
-            res.status(500).json({ error: "Database transaction failed" });
-            return;
+        } catch (err: any) {
+            console.error("❌ Webhook processing error:", err.message);
+            return res.status(500).json({ error: "Processing failed" });
         }
     }
 

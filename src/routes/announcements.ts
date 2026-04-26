@@ -41,8 +41,8 @@ router.get("/", authMiddleware, async (req: AuthRequest, res: Response, next: Ne
     }
 });
 
-// POST /api/announcements (Admin only)
-router.post("/", authMiddleware, roleMiddleware("admin"), async (req: AuthRequest, res: Response, next: NextFunction) => {
+// POST /api/announcements (Admin & Super Admin)
+router.post("/", authMiddleware, roleMiddleware("admin", "super_admin"), async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
         const { title, message } = req.body;
         const userId = req.user!.userId;

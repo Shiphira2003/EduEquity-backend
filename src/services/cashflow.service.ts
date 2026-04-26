@@ -5,8 +5,12 @@ import {
     disbursementsTable,
     applicationsTable,
     studentsTable,
+    notificationsTable,
+    usersTable,
+    announcementsTable,
 } from "../db/schema";
 import { eq, and, sql, desc, count, sum, between, inArray } from "drizzle-orm";
+import { notifySuperAdmins } from "./notification.service";
 
 // ============================================
 // FUND SOURCE & CASH FLOW MANAGEMENT
@@ -162,6 +166,64 @@ export const recordCashFlow = async (
           eq(fundSourcesTable.name, fundSource as any),
           eq(fundSourcesTable.cycleYear, currentYear)
         ));
+
+      // NEW: Check for budget depletion and auto-close
+      const [updatedSource] = await db.select({
+          name: fundSourcesTable.name,
+          budget: fundSourcesTable.budgetPerCycle,
+          allocated: fundSourcesTable.allocatedAmount,
+          cycleYear: fundSourcesTable.cycleYear,
+          isOpen: fundSourcesTable.isOpen,
+      })
+      .from(fundSourcesTable)
+      .where(and(
+          eq(fundSourcesTable.name, fundSource as any),
+          eq(fundSourcesTable.cycleYear, currentYear)
+      ));
+
+      if (updatedSource && updatedSource.isOpen && parseFloat(updatedSource.allocated ?? "0") >= parseFloat(updatedSource.budget ?? "0")) {
+          // 1. Close the fund source
+          await db.update(fundSourcesTable)
+                  .set({ isOpen: false, updatedAt: new Date() })
+                  .where(and(
+                      eq(fundSourcesTable.name, fundSource as any),
+                      eq(fundSourcesTable.cycleYear, currentYear)
+                  ));
+
+          // 2. Notify Super Admins
+          const adminMessage = `🚨 FUND DEPLETION: The ${updatedSource.name} (${updatedSource.cycleYear}) fund has reached its budget limit and has been automatically closed.`;
+          notifySuperAdmins(adminMessage, 'FUND_DEPLETED');
+
+          // 3. Create platform notifications for all Admins
+          try {
+              const admins = await db.select({ id: usersTable.id })
+                  .from(usersTable)
+                  .where(eq(usersTable.role, "ADMIN"));
+              
+              if (admins.length > 0) {
+                  const notifs = admins.map(admin => ({
+                      userId: admin.id,
+                      message: adminMessage,
+                      type: 'FUND_DEPLETED'
+                  }));
+                  await db.insert(notificationsTable).values(notifs);
+              }
+          } catch (e) {
+              console.error("Failed to create depletion notifications for admins:", e);
+          }
+
+          // 4. Create an announcement for Students
+          try {
+              await db.insert(announcementsTable).values({
+                  title: `📢 Fund Update: ${updatedSource.name} Bursary (${updatedSource.cycleYear})`,
+                  message: `Attention Students: The ${updatedSource.name} bursary fund for the ${updatedSource.cycleYear} cycle has reached its maximum budget allocation and is now closed for further applications. Thank you to everyone who applied.`,
+                  targetAudience: "STUDENTS",
+              });
+              console.log(`✅ Student announcement created for ${updatedSource.name} depletion.`);
+          } catch (e) {
+              console.error("Failed to create student announcement:", e);
+          }
+      }
     } else if (transactionType === "DISBURSEMENT") {
       await db.update(fundSourcesTable)
         .set({

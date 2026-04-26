@@ -33,7 +33,6 @@ router.post(
                 orphaned,
                 disabled,
                 other_hardships,
-                academic_score,
             } = req.body;
 
             // Verify this application belongs to the student
@@ -63,7 +62,6 @@ router.post(
                         orphaned: orphaned === true || orphaned === "true",
                         disabled: disabled === true || disabled === "true",
                         otherHardships: other_hardships ?? null,
-                        academicScore: academic_score?.toString() ?? null,
                         updatedAt: new Date(),
                     })
                     .where(eq(needAssessmentTable.applicationId, applicationId));
@@ -76,7 +74,6 @@ router.post(
                     orphaned: orphaned === true || orphaned === "true",
                     disabled: disabled === true || disabled === "true",
                     otherHardships: other_hardships ?? null,
-                    academicScore: academic_score?.toString() ?? null,
                 });
             }
 
@@ -117,7 +114,6 @@ router.get(
                 orphaned: needAssessmentTable.orphaned,
                 disabled: needAssessmentTable.disabled,
                 otherHardships: needAssessmentTable.otherHardships,
-                academicScore: needAssessmentTable.academicScore,
                 needScorePercentage: needAssessmentTable.scorePercentage,
                 needScore: applicationsTable.needScore,
                 taadaFlag: applicationsTable.taadaFlag,
@@ -156,7 +152,6 @@ router.get(
                 dependents: needAssessmentTable.dependents,
                 orphaned: needAssessmentTable.orphaned,
                 disabled: needAssessmentTable.disabled,
-                academicScore: needAssessmentTable.academicScore,
                 needScore: applicationsTable.needScore,
                 taadaFlag: applicationsTable.taadaFlag,
                 status: applicationsTable.status,

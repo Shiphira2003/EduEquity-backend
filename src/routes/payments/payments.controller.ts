@@ -11,20 +11,19 @@ import Stripe from "stripe";
 import { db } from "../../db/db";
 import { applicationsTable, studentsTable, usersTable } from "../../db/schema";
 import { eq } from "drizzle-orm";
+import { reconcilePayment } from "../../services/payment.reconciliation";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "sk_test_mock", {
-  apiVersion: "2025-02-24.acacia" as any, // latest stable typings might differ in version, forcing cast
+  apiVersion: "2025-02-24.acacia" as any, 
 });
+
+console.log(`💳 Stripe initialized with ${process.env.STRIPE_SECRET_KEY ? 'live secret key' : 'MOCK KEY (WARNING)'}`);
 
 // Get all payments
 export const getPayments = async (req: Request, res: Response) => {
   try {
     const payments = await getPaymentsService();
-    if (!payments || payments.length === 0) {
-      res.status(404).json({ message: "No payments found" });
-      return;
-    }
-    res.status(200).json(payments);
+    res.status(200).json(payments || []);
   } catch (error: any) {
     res.status(500).json({ error: error.message || "Failed to fetch payments" });
   }
@@ -164,7 +163,7 @@ export const deletePayment = async (req: Request, res: Response) => {
 
 // Create Stripe Checkout Session
 export const createCheckoutSession = async (req: Request, res: Response) => {
-  const { amount, applicationId } = req.body;
+  const { amount, applicationId, disbursementId } = req.body;
 
   if (!amount || isNaN(amount)) {
     res.status(400).json({ error: 'Invalid input' });
@@ -187,6 +186,9 @@ export const createCheckoutSession = async (req: Request, res: Response) => {
 
     const userId = appLookup[0].studentUserId;
 
+    // Get frontend URL from environment or default
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ['card'],
       mode: 'payment',
@@ -206,9 +208,10 @@ export const createCheckoutSession = async (req: Request, res: Response) => {
       metadata: {
         applicationId: applicationId ? String(applicationId) : '',
         userId: userId ? String(userId) : '',
+        disbursementId: disbursementId ? String(disbursementId) : '',
       },
-      success_url: 'http://localhost:5173/admin/disbursements',
-      cancel_url: 'http://localhost:5173/admin/disbursements',
+      success_url: `${frontendUrl}/admin/payment-success?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${frontendUrl}/admin/payment-cancel`,
     });
 
     res.status(200).json({ url: session.url });
@@ -217,3 +220,119 @@ export const createCheckoutSession = async (req: Request, res: Response) => {
     res.status(500).json({ error: 'Failed to create checkout session' });
   }
 };
+
+// Create Bulk Checkout Session for Multiple Disbursements
+export const createBulkCheckoutSession = async (req: Request, res: Response) => {
+  const { disbursements } = req.body;
+
+  if (!disbursements || !Array.isArray(disbursements) || disbursements.length === 0) {
+    res.status(400).json({ error: 'Invalid disbursements data' });
+    return;
+  }
+
+  try {
+    // Calculate total amount
+    const totalAmount = disbursements.reduce((sum: number, d: any) => sum + parseFloat(d.amount), 0);
+
+    // Get frontend URL
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+
+    // Create line items for each disbursement
+    const lineItems = disbursements.map((d: any, index: number) => ({
+      price_data: {
+        currency: 'kes',
+        unit_amount: Math.round(parseFloat(d.amount) * 100), // Convert to cents
+        product_data: {
+          name: `Bursary Disbursement #${d.disbursementId}`,
+          description: `Payment for disbursement ID: ${d.disbursementId}, Application: ${d.applicationId}`,
+        },
+      },
+      quantity: 1,
+    }));
+
+    // Create metadata with consolidated disbursement info to avoid Stripe metadata key/size limits
+    const metadata: any = {
+      bulk_payment: 'true',
+      disbursement_ids: disbursements.map((d: any) => d.disbursementId).join(','),
+      application_ids: disbursements.map((d: any) => d.applicationId).join(','),
+      amounts: disbursements.map((d: any) => d.amount).join(','),
+      total_disbursements: disbursements.length.toString(),
+    };
+
+    const session = await stripe.checkout.sessions.create({
+      payment_method_types: ['card'],
+      mode: 'payment',
+      line_items: lineItems,
+      metadata: metadata,
+      success_url: `${frontendUrl}/admin/payment-success?session_id={CHECKOUT_SESSION_ID}&bulk=true`,
+      cancel_url: `${frontendUrl}/admin/payment-cancel`,
+    });
+
+    res.status(200).json({ url: session.url });
+    } catch (err: any) {
+    console.error('❌ Bulk checkout session error:', err.message, err.stack);
+    res.status(500).json({ 
+      error: 'Failed to create bulk checkout session', 
+      details: err.message,
+      stripeCode: err.code 
+    });
+  }
+};
+
+// Manually verify a checkout session (Fallback for when webhooks are blocked/missing)
+export const verifyPaymentSession = async (req: Request, res: Response) => {
+    const { sessionId } = req.params;
+
+    if (!sessionId) {
+        res.status(400).json({ error: "Session ID required" });
+        return;
+    }
+
+    try {
+        const session = await stripe.checkout.sessions.retrieve(sessionId as string);
+        
+        if (session.payment_status === "paid") {
+            const isBulk = session.metadata?.bulk_payment === 'true';
+            const transactionId = session.payment_intent as string;
+            
+            console.log(`🔍 [Manual Verify] Verifying Session: ${sessionId} | Intent: ${transactionId}`);
+
+            if (isBulk) {
+                const disbursementIds = (session.metadata?.disbursement_ids || "").split(",");
+                const applicationIds = (session.metadata?.application_ids || "").split(",");
+                const amounts = (session.metadata?.amounts || "").split(",");
+
+                for (let i = 0; i < disbursementIds.length; i++) {
+                    const appId = Number(applicationIds[i]);
+                    const disbId = Number(disbursementIds[i]);
+                    const amount = amounts[i];
+
+                    const appLookup = await db.select({ suid: usersTable.id })
+                        .from(applicationsTable)
+                        .innerJoin(studentsTable, eq(applicationsTable.studentId, studentsTable.id))
+                        .innerJoin(usersTable, eq(studentsTable.userId, usersTable.id))
+                        .where(eq(applicationsTable.id, appId));
+
+                    if (appLookup.length > 0) {
+                        await reconcilePayment(appId, appLookup[0].suid, amount, transactionId, disbId);
+                    }
+                }
+            } else {
+                const appId = Number(session.metadata?.applicationId);
+                const userId = Number(session.metadata?.userId);
+                const disbId = Number(session.metadata?.disbursementId);
+                const amount = (session.amount_total! / 100).toString();
+
+                await reconcilePayment(appId, userId, amount, transactionId, disbId || undefined);
+            }
+
+            res.status(200).json({ success: true, message: "Payment verified and reconciled" });
+        } else {
+            res.status(200).json({ success: false, message: "Payment not yet processed" });
+        }
+    } catch (err: any) {
+        console.error("Verification error:", err);
+        res.status(500).json({ error: "Failed to verify session" });
+    }
+};
+
